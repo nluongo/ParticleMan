@@ -1,0 +1,119 @@
+# ParticleMan Cursor Rules
+
+## Project Overview
+This is ParticleMan, a framework for pre-training foundation models for particle physics tasks.
+
+## Development Guidelines
+
+### Code Style and Quality
+- Use Python 3.12 as the minimum version
+- Follow PEP 8 and use black for formatting (line length: 88)
+- Use ruff for fast linting
+- Sort imports with isort (black profile)
+- Use flake8 for additional linting
+- Maintain type hints for all functions and classes
+- Use mypy for static type checking
+
+### Project Structure
+- Use src/ layout: all code goes in src/particleman/
+- Tests go in src/particleman/tests/
+- Follow modular, readable, and safe coding practices
+- Keep functions small and focused
+- Use descriptive variable and function names
+
+### Dependencies and Environment
+- Use conda for environment management
+- All dependencies should be specified in pyproject.toml
+- Pin minimum versions for stability
+- Core dependencies: torch, numpy, pandas, scikit-learn
+- Dev dependencies: pytest, black, ruff, mypy, pre-commit
+
+### Testing
+- Use pytest for all testing
+- Maintain high test coverage
+- Tests should be in src/particleman/tests/
+- Use descriptive test names
+- Test both happy path and edge cases
+
+### Security
+- Never use eval() without proper sandboxing
+- Validate all inputs, especially from external sources
+- Use bandit for security scanning
+- Be cautious with pickle and other serialization formats
+
+### Documentation
+- Use docstrings for all public functions, classes, and modules
+- Follow Google or NumPy docstring style
+- Keep README.md updated with usage examples
+- Document complex algorithms and data transformations
+
+### Git and Collaboration
+- Use meaningful commit messages
+- Run pre-commit hooks before committing
+- All code must pass CI checks before merging
+- Use feature branches for development
+
+### Performance
+- Profile code for performance bottlenecks
+- Use vectorized operations where possible (numpy, torch)
+- Consider memory usage for large datasets
+- Use appropriate data types (float32 vs float64)
+
+### Machine Learning Specific
+- Use proper train/validation/test splits
+- Implement reproducible experiments (set seeds)
+- Log experiments with wandb or tensorboard
+- Use configuration management (hydra/omegaconf)
+- Validate model inputs and outputs
+- Handle missing data appropriately
+
+### Code Review Checklist
+- [ ] Code follows style guidelines (black, ruff, isort)
+- [ ] All functions have type hints
+- [ ] Tests are written and pass
+- [ ] Documentation is updated
+- [ ] No security vulnerabilities
+- [ ] Performance considerations addressed
+- [ ] Error handling is appropriate
+- [ ] Code is modular and reusable
+
+### Common Patterns
+- Use dataclasses for structured data
+- Use enums for constants and options
+- Use context managers for resource management
+- Use logging instead of print statements
+- Use pathlib for file system operations
+- Use f-strings for string formatting
+
+### Avoid
+- Global variables (use configuration instead)
+- Hard-coded paths or values
+- Deep nesting (max 4 levels)
+- Long functions (>50 lines)
+- Mutable default arguments
+- Using star imports (from module import *)
+
+### File Organization
+```
+src/particleman/
+├── __init__.py          # Package initialization with version
+├── core/                # Core functionality (when needed)
+├── models/              # Model definitions (when needed)
+├── data/                # Data handling utilities (when needed)
+├── training/            # Training logic (when needed)
+├── utils/               # Utility functions (when needed)
+└── tests/               # All tests
+    ├── __init__.py
+    ├── test_*.py        # Test files
+    └── conftest.py      # Test configuration (when needed)
+```
+
+### Pre-commit Hooks
+The following tools run automatically on commit:
+- ruff (linting and formatting)
+- black (code formatting)
+- isort (import sorting)
+- flake8 (additional linting)
+- mypy (type checking)
+- pytest (tests)
+- bandit (security scanning) 

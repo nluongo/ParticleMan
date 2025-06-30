@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ['3.12']
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e ".[dev]"
+
+    - name: Lint with ruff
+      run: |
+        ruff check src/
+        ruff format --check src/
+
+    - name: Lint with flake8
+      run: |
+        flake8 src/
+
+    - name: Check imports with isort
+      run: |
+        isort --check-only --profile black src/
+
+    - name: Check formatting with black
+      run: |
+        black --check src/
+
+    - name: Type check with mypy
+      run: |
+        mypy src/
+
+    - name: Test with pytest
+      run: |
+        pytest src/particleman/tests/ --cov=particleman --cov-report=xml --cov-report=term-missing -v
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false
+
+  conda-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -l {0}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Miniconda
+      uses: conda-incubator/setup-miniconda@v2
+      with:
+        auto-update-conda: true
+        python-version: 3.12
+        environment-file: environment.yml
+        activate-environment: particleman
+
+    - name: Conda info
+      run: |
+        conda info
+        conda list
+
+    - name: Test with pytest (conda environment)
+      run: |
+        pytest src/particleman/tests/ -v
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install bandit[toml]
+
+    - name: Security check with bandit
+      run: |
+        bandit -r src/ -f json 

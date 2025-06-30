@@ -1,0 +1,49 @@
+name: particleman
+channels:
+  - conda-forge
+  - pytorch
+  - defaults
+dependencies:
+  - python=3.12
+  - pip
+  # Core scientific computing
+  - numpy>=1.24.0
+  - pandas>=2.0.0
+  - scikit-learn>=1.3.0
+  - scipy>=1.11.0
+  # Plotting and visualization
+  - matplotlib>=3.7.0
+  - seaborn>=0.12.0
+  # PyTorch ecosystem (CPU version by default)
+  - pytorch>=2.0.0
+  - torchvision
+  - torchaudio
+  - cpuonly  # Remove this and add pytorch-cuda=11.8 or 12.1 for GPU support
+  # Development tools
+  - pytest>=7.4.0
+  - black>=23.0.0
+  - isort>=5.12.0
+  - flake8>=6.0.0
+  - mypy>=1.5.0
+  - pre-commit>=3.3.0
+  # Jupyter (optional for development)
+  - jupyter
+  - ipykernel
+  # YAML handling
+  - pyyaml>=6.0
+  # Progress bars
+  - tqdm>=4.65.0
+  # Git (useful for pre-commit)
+  - git
+  # Additional dependencies via pip
+  - pip:
+    - ruff>=0.0.280
+    - pytest-cov>=4.1.0
+    - pytest-xdist>=3.3.0
+    - wandb>=0.15.0
+    - tensorboard>=2.13.0
+    - hydra-core>=1.3.0
+    - omegaconf>=2.3.0
+    - tox>=4.6.0
+    # Install package in development mode
+    - -e .
