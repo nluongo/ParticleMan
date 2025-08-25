@@ -4,7 +4,7 @@ channels:
   - pytorch
   - defaults
 dependencies:
-  - python=3.12
+  - python=3.11
   - pip
   # Core scientific computing
   - numpy>=1.24.0

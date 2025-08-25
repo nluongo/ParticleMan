@@ -31,6 +31,7 @@ from tqdm import tqdm
 try:
     import ROOT
     ROOT.gROOT.SetBatch(True)  # Suppress ROOT graphics
+    ROOT.xAOD.Init()
 except ImportError:
     print("ERROR: ROOT with PyROOT is required but not found.")
     print("Please install ROOT with Python bindings:")
@@ -106,6 +107,7 @@ UNKNOWN_PARTICLE_ID = 15
 
 # Maximum number of particles per event (for padding/truncation)
 MAX_PARTICLES_PER_EVENT = 200
+
 
 
 def get_particle_id(pdg_id: int) -> int:
@@ -399,12 +401,8 @@ def process_xaod_file(
             raise RuntimeError(f"Cannot open ROOT file: {input_file}")
         
         # Get the main tree (common names in xAOD)
-        tree_names = ["CollectionTree", "physics", "nominal"]
-        tree = None
-        for name in tree_names:
-            tree = root_file.Get(name)
-            if tree:
-                break
+        tree_name = "CollectionTree"
+        tree = ROOT.xAOD.MakeTransientTree(root_file, tree_name)
         
         if not tree:
             raise RuntimeError(f"Cannot find main tree in {input_file}")
@@ -434,6 +432,18 @@ def process_xaod_file(
                 reco_pt, reco_eta, reco_phi, reco_particle_id = extract_reco_particles(tree, event_idx)
                 reco_is_truth = [False] * len(reco_pt)
                 
+                max_particles_per_source = int(max_particles / 2)
+                truth_pt = truth_pt[:max_particles_per_source]
+                truth_eta = truth_eta[:max_particles_per_source]
+                truth_phi = truth_phi[:max_particles_per_source]
+                truth_particle_id = truth_particle_id[:max_particles_per_source]
+                truth_is_truth = truth_is_truth[:max_particles_per_source]
+                reco_pt = reco_pt[:max_particles_per_source]
+                reco_eta = reco_eta[:max_particles_per_source]
+                reco_phi = reco_phi[:max_particles_per_source]
+                reco_particle_id = reco_particle_id[:max_particles_per_source]
+                reco_is_truth = reco_is_truth[:max_particles_per_source]
+
                 # Combine truth and reco particles
                 combined_pt = truth_pt + reco_pt
                 combined_eta = truth_eta + reco_eta
