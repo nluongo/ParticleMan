@@ -16,13 +16,26 @@ VERSION = __version__
 try:
     from .models import ParticleTransformer, ParticleConfig
     from .training import ParticleTrainer
+    from .data import (
+        ParticleDataset,
+        create_dataloaders,
+        DataConfig,
+        load_config,
+    )
     
     __all__ = [
         "__version__",
         "VERSION",
+        # Models
         "ParticleTransformer",
         "ParticleConfig", 
+        # Training
         "ParticleTrainer",
+        # Data
+        "ParticleDataset",
+        "create_dataloaders",
+        "DataConfig",
+        "load_config",
     ]
 except ImportError:
     # Dependencies not available (e.g., during installation)

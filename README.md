@@ -13,11 +13,12 @@ ParticleMan is a comprehensive framework designed to facilitate the development,
 ## Features
 
 - **Modular Architecture**: Clean, modular design for easy extension and customization
+- **Flexible Data Loading**: Config-driven data loading from ROOT and HDF5 files
+- **Multiple Particle Collections**: Support for combining electrons, muons, jets, and other particle types
 - **Type Safety**: Full type hints and static type checking with mypy
 - **Comprehensive Testing**: Extensive test suite with pytest
 - **Code Quality**: Automated linting and formatting with ruff, black, and isort
 - **CI/CD**: Automated testing and quality checks with GitHub Actions
-- **Documentation**: Comprehensive documentation and usage examples
 
 ## Installation
 
@@ -61,14 +62,125 @@ pip install particleman
 
 ## Quick Start
 
+### Loading Data
+
+ParticleMan uses YAML configuration files to define how data is loaded from ROOT or HDF5 files:
+
 ```python
-import particleman
+from particleman import create_dataloaders, load_config
 
-# Check version
-print(particleman.__version__)
+# Create train/val/test dataloaders from a config file
+train_loader, val_loader, test_loader = create_dataloaders(
+    "configs/data/my_config.yaml",
+    batch_size=32,
+    num_workers=4,
+)
 
-# Your code here...
+# Training loop
+for batch in train_loader:
+    pt = batch['pt']           # (batch_size, max_particles)
+    eta = batch['eta']         # (batch_size, max_particles)
+    phi = batch['phi']         # (batch_size, max_particles)
+    particle_id = batch['particle_id']  # (batch_size, max_particles)
+    mask = batch['mask']       # (batch_size, max_particles) - True for real particles
+    # ... your training code
 ```
+
+### Training a Model
+
+```python
+from particleman import ParticleTransformer, ParticleConfig, ParticleTrainer
+from particleman import create_dataloaders
+
+# Create model
+config = ParticleConfig(
+    d_model=256,
+    n_heads=8,
+    n_layers=6,
+    max_particles=200,
+)
+model = ParticleTransformer(config)
+
+# Load data
+train_loader, val_loader, _ = create_dataloaders(
+    "configs/data/physlite.yaml",
+    batch_size=64,
+)
+
+# Train
+trainer = ParticleTrainer(
+    model=model,
+    train_dataloader=train_loader,
+    val_dataloader=val_loader,
+    lr=1e-4,
+)
+trainer.train(num_epochs=10)
+```
+
+## Data Configuration
+
+ParticleMan uses YAML files to configure data loading. This allows you to:
+- Switch between ROOT and HDF5 files without code changes
+- Define multiple particle collections (electrons, muons, jets, etc.)
+- Map column names to model inputs
+- Configure preprocessing (pT cuts, scaling, etc.)
+
+### Example Configuration
+
+```yaml
+# configs/data/my_config.yaml
+source:
+  type: "root"  # or "hdf5"
+  files:
+    - "data/*.root"
+  tree_name: "CollectionTree"
+
+# Define particle collections to load
+collections:
+  electrons:
+    enabled: true
+    columns:
+      pt: "AnalysisElectronsAuxDyn.pt"
+      eta: "AnalysisElectronsAuxDyn.eta"
+      phi: "AnalysisElectronsAuxDyn.phi"
+    fixed_particle_id: 0  # Assign all electrons to category 0
+    is_vector: true
+
+  jets:
+    enabled: true
+    columns:
+      pt: "AnalysisJetsAuxDyn.pt"
+      eta: "AnalysisJetsAuxDyn.eta"
+      phi: "AnalysisJetsAuxDyn.phi"
+      particle_id: "AnalysisJetsAuxDyn.PartonTruthLabelID"
+    is_vector: true
+
+# Map raw IDs to model categories
+particle_id_map:
+  5: 13   # b-jet -> B meson category
+  4: 14   # c-jet -> D meson category
+  0: 7    # light jet -> pion category
+
+preprocessing:
+  pt_cut: 0.5       # Minimum pT in GeV
+  eta_cut: 5.0      # Maximum |eta|
+  max_particles: 200
+  pt_scale: 1000.0  # MeV -> GeV
+```
+
+### Exploring Your Data Files
+
+Use the exploration scripts to discover column names in your data:
+
+```bash
+# For ROOT files
+python scripts/explore_root_file.py data.root --filter "*pt*" --sample 0
+
+# For HDF5 files
+python scripts/explore_h5_file.py data.h5 --sample 0
+```
+
+These scripts will suggest configuration snippets based on your file structure.
 
 ## Data Processing
 
@@ -184,20 +296,30 @@ particleman/
 ├── src/
 │   └── particleman/
 │       ├── __init__.py
+│       ├── data/                  # Data loading module
+│       │   ├── config.py          # Configuration dataclasses
+│       │   ├── base_loader.py     # Abstract base loader
+│       │   ├── root_loader.py     # ROOT file loader (uproot)
+│       │   ├── hdf5_loader.py     # HDF5 file loader
+│       │   └── dataset.py         # PyTorch Dataset wrapper
+│       ├── models/
+│       │   └── particle_transformer.py
+│       ├── training/
+│       │   └── trainer.py
 │       └── tests/
-│           ├── __init__.py
-│           └── test_version.py
-├── .github/
-│   └── workflows/
-│       └── ci.yml
-├── pyproject.toml
-├── environment.yml          # CPU-only conda environment
-├── environment-gpu.yml      # GPU-enabled conda environment
-├── .pre-commit-config.yaml
-├── .gitignore
-├── .cursorrules
-├── README.md
-└── LICENSE
+├── configs/
+│   └── data/                      # Data configuration files
+│       ├── default.yaml
+│       ├── physlite.yaml
+│       └── preprocessed_h5.yaml
+├── scripts/
+│   ├── explore_root_file.py       # ROOT file structure explorer
+│   ├── explore_h5_file.py         # HDF5 file structure explorer
+│   ├── convert_xaod_to_h5.py
+│   └── demo_h5_format.py
+├── environment.yml                # CPU-only conda environment
+├── environment-gpu.yml            # GPU-enabled conda environment
+└── README.md
 ```
 
 ## Contributing

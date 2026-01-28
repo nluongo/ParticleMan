@@ -19,6 +19,11 @@ dependencies:
   - torchvision
   - torchaudio
   - cpuonly  # Remove this and add pytorch-cuda=11.8 or 12.1 for GPU support
+  # ROOT file handling (pure Python, no ROOT installation needed)
+  - uproot>=5.0.0
+  - awkward>=2.0.0
+  # HDF5 handling
+  - h5py>=3.9.0
   # Development tools
   - pytest>=7.4.0
   - black>=23.0.0
@@ -47,3 +52,4 @@ dependencies:
     - tox>=4.6.0
     # Install package in development mode
     - -e .
+
