@@ -7,10 +7,9 @@ using masked prediction.
 
 import logging
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 import torch
-import torch.nn as nn
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -88,7 +87,9 @@ class ParticleTrainer:
         Perform a single training step.
         
         Args:
-            batch: Batch of particle data
+            batch: Batch of particle data with keys:
+                - pt, eta, phi, particle_id: Particle features
+                - mask: Boolean mask where True = real particle, False = padding
             
         Returns:
             Dictionary of loss values
@@ -101,18 +102,27 @@ class ParticleTrainer:
         phi = batch['phi'].to(self.device)
         particle_id = batch['particle_id'].to(self.device)
         
-        # Create masks
-        masked_inputs, mask_targets = self.model.create_masks(pt, eta, phi, particle_id)
+        # Get padding mask from batch
+        # batch['mask'] is True for real particles, we need True for padding
+        real_particle_mask = batch['mask'].to(self.device)
+        padding_mask = ~real_particle_mask  # Invert: True = padding
         
-        # Forward pass with masked inputs
+        # Create masks for prediction (only mask real particles)
+        masked_inputs, mask_targets = self.model.create_masks(
+            pt, eta, phi, particle_id, 
+            padding_mask=padding_mask
+        )
+        
+        # Forward pass with masked inputs and padding mask
         predictions = self.model(
             masked_inputs['pt'],
             masked_inputs['eta'],
             masked_inputs['phi'],
-            masked_inputs['particle_id']
+            masked_inputs['particle_id'],
+            padding_mask=padding_mask,
         )
         
-        # Compute loss
+        # Compute loss (only on masked real particles)
         losses = self.model.compute_loss(predictions, mask_targets)
         
         # Backward pass
@@ -156,15 +166,23 @@ class ParticleTrainer:
                 phi = batch['phi'].to(self.device)
                 particle_id = batch['particle_id'].to(self.device)
                 
+                # Get padding mask
+                real_particle_mask = batch['mask'].to(self.device)
+                padding_mask = ~real_particle_mask
+                
                 # Create masks
-                masked_inputs, mask_targets = self.model.create_masks(pt, eta, phi, particle_id)
+                masked_inputs, mask_targets = self.model.create_masks(
+                    pt, eta, phi, particle_id,
+                    padding_mask=padding_mask
+                )
                 
                 # Forward pass
                 predictions = self.model(
                     masked_inputs['pt'],
                     masked_inputs['eta'],
                     masked_inputs['phi'],
-                    masked_inputs['particle_id']
+                    masked_inputs['particle_id'],
+                    padding_mask=padding_mask,
                 )
                 
                 # Compute loss

@@ -147,12 +147,15 @@ python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = [
-    "--cov=particleman",
-    "--cov-report=term-missing",
-    "--cov-report=html",
-    "--cov-report=xml",
     "-v",
+    "-p", 
+    "no:GaudiTesting",
 ]
+# Disable coverage by default (run with --cov=particleman to enable)
+# "--cov=particleman",
+# "--cov-report=term-missing",
+# "--cov-report=html",
+# "--cov-report=xml",
 
 [tool.coverage.run]
 source = ["src/particleman"]
