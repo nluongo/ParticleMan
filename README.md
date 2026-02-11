@@ -343,8 +343,8 @@ If you use ParticleMan in your research, please cite:
 ```bibtex
 @software{particleman,
   title={ParticleMan: A framework for pre-training foundation models for particle physics tasks},
-  author={Your Name},
+  author=Nicholas Luongo,
   year={2024},
-  url={https://github.com/yourusername/particleman}
+  url={https://github.com/nluongo/particleman}
 }
 ``` 

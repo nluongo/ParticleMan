@@ -15,6 +15,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from ..models.particle_transformer import ParticleTransformer, ParticleConfig
+from ..loggers.base import BaseLogger, NoOpLogger
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,8 @@ class ParticleTrainer:
         weight_decay: float = 0.01,
         device: Optional[str] = None,
         log_interval: int = 100,
-        save_dir: Optional[Path] = None
+        save_dir: Optional[Path] = None,
+        experiment_logger: Optional[BaseLogger] = None,
     ) -> None:
         """
         Initialize the trainer.
@@ -45,12 +47,14 @@ class ParticleTrainer:
             device: Device to train on (auto-detect if None)
             log_interval: How often to log training stats
             save_dir: Directory to save checkpoints
+            experiment_logger: Logger for experiment tracking
         """
         self.model = model
         self.train_dataloader = train_dataloader
         self.val_dataloader = val_dataloader
         self.log_interval = log_interval
         self.save_dir = Path(save_dir) if save_dir else None
+        self.experiment_logger = experiment_logger or NoOpLogger()
         
         # Set device
         if device is None:
@@ -138,14 +142,17 @@ class ParticleTrainer:
         # Convert to float for logging
         return {k: v.item() for k, v in losses.items()}
     
-    def validate(self) -> Dict[str, float]:
+    def evaluate(self, dataloader: DataLoader) -> Dict[str, float]:
         """
-        Perform validation.
+        Evaluate the model on a given dataloader.
         
+        Args:
+            dataloader: DataLoader to evaluate on
+            
         Returns:
-            Dictionary of validation loss values
+            Dictionary of loss values
         """
-        if self.val_dataloader is None:
+        if dataloader is None:
             return {}
         
         self.model.eval()
@@ -159,7 +166,7 @@ class ParticleTrainer:
         num_batches = 0
         
         with torch.no_grad():
-            for batch in self.val_dataloader:
+            for batch in dataloader:
                 # Move batch to device
                 pt = batch['pt'].to(self.device)
                 eta = batch['eta'].to(self.device)
@@ -200,7 +207,11 @@ class ParticleTrainer:
                 total_losses[k] /= num_batches
         
         return total_losses
-    
+
+    def validate(self) -> Dict[str, float]:
+        """Perform validation on the validation set."""
+        return self.evaluate(self.val_dataloader)
+
     def save_checkpoint(self, filename: str) -> None:
         """Save model checkpoint."""
         if self.save_dir is None:
@@ -243,6 +254,19 @@ class ParticleTrainer:
         logger.info(f"Device: {self.device}")
         logger.info(f"Model parameters: {sum(p.numel() for p in self.model.parameters()):,}")
         
+        # Do initial loss logging for both train and val
+        logger.info(f"Performing initial loss calculation over training dataset")
+        init_train_losses = self.evaluate(self.train_dataloader)
+        if init_train_losses:
+            logger.info(f"Epoch 0 - Initial Training Loss: {init_train_losses['total_loss']:.4f}")
+            self.experiment_logger.log_metrics({f"train_{k}": v for k, v in init_train_losses.items()}, step=self.step)
+
+        logger.info(f"Performing initial loss calculation over validation dataset")
+        init_val_losses = self.evaluate(self.val_dataloader)
+        if init_val_losses:
+            logger.info(f"Epoch 0 - Initial validation Loss: {init_val_losses['total_loss']:.4f}")
+            self.experiment_logger.log_metrics({f"val_{k}": v for k, v in init_val_losses.items()}, step=self.step)
+
         for epoch in range(num_epochs):
             self.epoch = epoch
             epoch_losses = []
@@ -252,18 +276,27 @@ class ParticleTrainer:
             for batch in pbar:
                 losses = self.train_step(batch)
                 epoch_losses.append(losses)
-                self.step += 1
                 
                 # Log training stats
                 if self.step % self.log_interval == 0:
                     avg_loss = sum(l['total_loss'] for l in epoch_losses[-self.log_interval:]) / min(len(epoch_losses), self.log_interval)
-                    pbar.set_postfix({'loss': f"{avg_loss:.4f}", 'lr': f"{self.scheduler.get_last_lr()[0]:.2e}"})
+                    lr = self.scheduler.get_last_lr()[0]
+                    pbar.set_postfix({'loss': f"{avg_loss:.4f}", 'lr': f"{lr:.2e}"})
+                    metrics_to_log = losses.copy()
+                    metrics_to_log['avg_loss'] = avg_loss
+                    metrics_to_log['lr'] = lr
+                    metrics_to_log = {f"train_{k}": v for k, v in metrics_to_log.items()}
+
+                    self.experiment_logger.log_metrics(metrics_to_log, step=self.step)
+
+                self.step += 1
             
             # Validation
             val_losses = self.validate()
             if val_losses:
                 val_loss = val_losses['total_loss']
                 logger.info(f"Epoch {epoch+1} - Val Loss: {val_loss:.4f}")
+                self.experiment_logger.log_metrics({f"val_{k}": v for k, v in val_losses.items()}, step=self.step)
                 
                 # Save best model
                 if val_loss < self.best_val_loss:
