@@ -8,6 +8,7 @@ from .particle_transformer import (
     ParticleTransformer,
     ParticleConfig,
     EmbeddingType,
+    PhiEncoding,
     ConcatEmbedding,
     JointEmbedding,
 )
@@ -16,6 +17,7 @@ __all__ = [
     "ParticleTransformer",
     "ParticleConfig",
     "EmbeddingType",
+    "PhiEncoding",
     "ConcatEmbedding",
     "JointEmbedding",
 ]

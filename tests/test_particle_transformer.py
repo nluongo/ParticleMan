@@ -7,6 +7,7 @@ from particleman.models.particle_transformer import (
     ParticleTransformer,
     ParticleConfig,
     EmbeddingType,
+    PhiEncoding,
     ConcatEmbedding,
     JointEmbedding,
 )
@@ -25,7 +26,7 @@ class TestParticleConfig:
         assert config.d_ff == 1024
         assert config.dropout == 0.1
         assert config.max_particles == 100
-        assert config.n_particle_types == 13
+        assert config.n_particle_types == 16
         assert config.mask_prob == 0.15
         assert config.mask_continuous_std == 0.1
         assert config.pt_range == (0.0, 1000.0)
@@ -48,8 +49,8 @@ class TestParticleConfig:
         assert config.max_particles == 50
         # Check that other values remain default
         assert config.dropout == 0.1
-        assert config.n_particle_types == 13
-    
+        assert config.n_particle_types == 16
+
     def test_concat_embedding_config(self) -> None:
         """Test configuration with concat embedding."""
         config = ParticleConfig(
@@ -67,6 +68,16 @@ class TestParticleConfig:
         assert config.embedding_type == EmbeddingType.JOINT
         assert config.id_embed_dim == 64
         assert config.embed_hidden_dim == 256
+    
+    def test_phi_encoding_config(self) -> None:
+        """Test configuration with different phi encodings."""
+        # Default is RAW
+        config_raw = ParticleConfig()
+        assert config_raw.phi_encoding == PhiEncoding.RAW
+        
+        # SINCOS encoding
+        config_sincos = ParticleConfig(phi_encoding=PhiEncoding.SINCOS)
+        assert config_sincos.phi_encoding == PhiEncoding.SINCOS
 
 
 class TestParticleTransformer:
@@ -111,7 +122,7 @@ class TestParticleTransformer:
     @pytest.fixture
     def sample_data(self, config: ParticleConfig) -> dict:
         """Create sample particle data."""
-        batch_size = 2
+        batch_size = 32
         seq_len = config.max_particles
         
         return {
@@ -183,6 +194,59 @@ class TestParticleTransformer:
         # Check output shapes are unchanged
         assert predictions['pt'].shape == (batch_size, seq_len)
         assert predictions['hidden_states'].shape == (batch_size, seq_len, model.config.d_model)
+    
+    def test_forward_pass_sincos_phi(self, sample_data: dict) -> None:
+        """Test the forward pass with sincos phi encoding."""
+        # Create model with SINCOS phi encoding
+        config = ParticleConfig(
+            d_model=64,
+            n_heads=4,
+            n_layers=2,
+            d_ff=128,
+            max_particles=20,
+            n_particle_types=5,
+            phi_encoding=PhiEncoding.SINCOS,
+        )
+        model = ParticleTransformer(config)
+        
+        pt = sample_data['pt']
+        eta = sample_data['eta']
+        phi = sample_data['phi']
+        particle_id = sample_data['particle_id']
+        
+        with torch.no_grad():
+            predictions = model(pt, eta, phi, particle_id)
+        
+        # Check output shapes
+        batch_size, seq_len = pt.shape
+        assert predictions['pt'].shape == (batch_size, seq_len)
+        assert predictions['hidden_states'].shape == (batch_size, seq_len, config.d_model)
+    
+    def test_sincos_handles_phi_wraparound(self) -> None:
+        """Test that sincos encoding handles phi wraparound correctly."""
+        config = ParticleConfig(
+            d_model=64,
+            n_heads=4,
+            n_layers=2,
+            n_particle_types=5,
+            phi_encoding=PhiEncoding.SINCOS,
+        )
+        model = ParticleTransformer(config)
+        model.eval()
+        
+        # Create two inputs where phi differs by 2*pi (should be equivalent)
+        pt = torch.tensor([[10.0]])
+        eta = torch.tensor([[0.0]])
+        phi1 = torch.tensor([[0.1]])
+        phi2 = torch.tensor([[0.1 + 2 * 3.14159]])  # Same physical angle
+        particle_id = torch.tensor([[0]])
+        
+        with torch.no_grad():
+            out1 = model(pt, eta, phi1, particle_id)
+            out2 = model(pt, eta, phi2, particle_id)
+        
+        # Hidden states should be very similar (sin/cos are periodic)
+        assert torch.allclose(out1['hidden_states'], out2['hidden_states'], atol=1e-5)
     
     def test_forward_pass_concat(self, concat_model: ParticleTransformer, sample_data: dict) -> None:
         """Test the forward pass with concat embedding."""

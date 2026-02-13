@@ -16,6 +16,12 @@ class EmbeddingType(Enum):
     JOINT = "joint"    # Joint MLP over all features
 
 
+class PhiEncoding(Enum):
+    """How to encode the phi (azimuthal angle) feature."""
+    RAW = "raw"        # Use phi directly (normalized to [-1, 1])
+    SINCOS = "sincos"  # Use sin(phi) and cos(phi) separately
+
+
 @dataclass
 class ParticleConfig:
     """Configuration for the Particle Transformer model."""
@@ -34,6 +40,7 @@ class ParticleConfig:
     phi_range: Tuple[float, float] = (-3.14159, 3.14159)  # phi in [-π, π] (normalized to [-1, 1])
     # Embedding configuration
     embedding_type: EmbeddingType = EmbeddingType.JOINT
+    phi_encoding: PhiEncoding = PhiEncoding.RAW  # How to encode phi: "raw" or "sincos"
     id_embed_dim: int = 32  # Dimension for particle ID embedding (used in JOINT mode)
     embed_hidden_dim: int = 128  # Hidden dimension for embedding MLP (used in JOINT mode)
 
@@ -45,11 +52,17 @@ class ConcatEmbedding(nn.Module):
     Each feature (pt, eta, phi, id) is projected to d_model/4 dimensions independently,
     then concatenated to form the final d_model-dimensional embedding.
     
-    Architecture:
+    Architecture (RAW phi):
         pt  → Linear(1, d_model//4)  ─┐
         eta → Linear(1, d_model//4)  ─┼─→ concat → (d_model,)
         phi → Linear(1, d_model//4)  ─┤
         id  → Embedding(d_model//4)  ─┘
+    
+    Architecture (SINCOS phi):
+        pt      → Linear(1, d_model//4)  ─┐
+        eta     → Linear(1, d_model//4)  ─┼─→ concat → (d_model,)
+        sin/cos → Linear(2, d_model//4)  ─┤
+        id      → Embedding(d_model//4)  ─┘
     """
     
     def __init__(self, config: ParticleConfig) -> None:
@@ -59,19 +72,26 @@ class ConcatEmbedding(nn.Module):
         
         self.pt_proj = nn.Linear(1, feature_dim)
         self.eta_proj = nn.Linear(1, feature_dim)
-        self.phi_proj = nn.Linear(1, feature_dim)
+        
+        # Phi projection depends on encoding type
+        if config.phi_encoding == PhiEncoding.SINCOS:
+            self.phi_proj = nn.Linear(2, feature_dim)  # sin(phi), cos(phi)
+        else:
+            self.phi_proj = nn.Linear(1, feature_dim)  # raw phi
+            
         self.particle_id_embedding = nn.Embedding(config.n_particle_types, feature_dim)
     
     def forward(
-        self, pt_norm: Tensor, eta_norm: Tensor, phi_norm: Tensor, particle_id: Tensor
+        self, pt_norm: Tensor, eta_norm: Tensor, phi_processed: Tensor, particle_id: Tensor
     ) -> Tensor:
         """
         Embed particles by projecting features independently and concatenating.
         
         Args:
-            pt_norm: Normalized pT (batch, seq)
-            eta_norm: Normalized eta (batch, seq)
-            phi_norm: Normalized phi (batch, seq)
+            pt_norm: Normalized pT in [0, 1] (batch, seq)
+            eta_norm: Normalized eta in [-1, 1] (batch, seq)
+            phi_processed: For RAW encoding: normalized phi in [-1, 1].
+                          For SINCOS encoding: raw phi in radians.
             particle_id: Particle type IDs (batch, seq)
         
         Returns:
@@ -79,7 +99,18 @@ class ConcatEmbedding(nn.Module):
         """
         pt_emb = self.pt_proj(pt_norm.unsqueeze(-1))
         eta_emb = self.eta_proj(eta_norm.unsqueeze(-1))
-        phi_emb = self.phi_proj(phi_norm.unsqueeze(-1))
+        
+        # Encode phi based on config
+        if self.config.phi_encoding == PhiEncoding.SINCOS:
+            # Compute sin(phi) and cos(phi) from raw phi
+            sin_phi = torch.sin(phi_processed)
+            cos_phi = torch.cos(phi_processed)
+            phi_features = torch.stack([sin_phi, cos_phi], dim=-1)  # (batch, seq, 2)
+            phi_emb = self.phi_proj(phi_features)
+        else:
+            # phi_processed is already normalized to [-1, 1]
+            phi_emb = self.phi_proj(phi_processed.unsqueeze(-1))
+        
         pid_emb = self.particle_id_embedding(particle_id)
         
         return torch.cat([pt_emb, eta_emb, phi_emb, pid_emb], dim=-1)
@@ -92,8 +123,13 @@ class JointEmbedding(nn.Module):
     All features are fed together into an MLP, allowing the network to learn
     cross-feature interactions during the embedding stage.
     
-    Architecture:
+    Architecture (RAW phi):
         [pt, eta, phi, id_emb] → Linear → GELU → Linear → (d_model,)
+        Input dim: 3 + id_embed_dim
+    
+    Architecture (SINCOS phi):
+        [pt, eta, sin(phi), cos(phi), id_emb] → Linear → GELU → Linear → (d_model,)
+        Input dim: 4 + id_embed_dim
     
     Reference:
         Qu & Gouskos, "Particle Transformer for Jet Tagging" (2022)
@@ -107,8 +143,15 @@ class JointEmbedding(nn.Module):
             config.n_particle_types, config.id_embed_dim
         )
         
-        # Input: 3 continuous features + id_embed_dim
-        input_dim = 3 + config.id_embed_dim
+        # Input dimension depends on phi encoding
+        # RAW: pt, eta, phi (3 features)
+        # SINCOS: pt, eta, sin(phi), cos(phi) (4 features)
+        if config.phi_encoding == PhiEncoding.SINCOS:
+            n_continuous = 4  # pt, eta, sin(phi), cos(phi)
+        else:
+            n_continuous = 3  # pt, eta, phi
+        
+        input_dim = n_continuous + config.id_embed_dim
         
         self.mlp = nn.Sequential(
             nn.Linear(input_dim, config.embed_hidden_dim),
@@ -119,22 +162,30 @@ class JointEmbedding(nn.Module):
         )
     
     def forward(
-        self, pt_norm: Tensor, eta_norm: Tensor, phi_norm: Tensor, particle_id: Tensor
+        self, pt_norm: Tensor, eta_norm: Tensor, phi_processed: Tensor, particle_id: Tensor
     ) -> Tensor:
         """
         Embed particles by jointly processing all features through an MLP.
         
         Args:
-            pt_norm: Normalized pT (batch, seq)
-            eta_norm: Normalized eta (batch, seq)
-            phi_norm: Normalized phi (batch, seq)
+            pt_norm: Normalized pT in [0, 1] (batch, seq)
+            eta_norm: Normalized eta in [-1, 1] (batch, seq)
+            phi_processed: For RAW encoding: normalized phi in [-1, 1].
+                          For SINCOS encoding: raw phi in radians.
             particle_id: Particle type IDs (batch, seq)
         
         Returns:
             Particle embeddings of shape (batch, seq, d_model)
         """
-        # Stack continuous features: (batch, seq, 3)
-        continuous = torch.stack([pt_norm, eta_norm, phi_norm], dim=-1)
+        # Build continuous features based on phi encoding
+        if self.config.phi_encoding == PhiEncoding.SINCOS:
+            # Compute sin(phi) and cos(phi) from raw phi
+            sin_phi = torch.sin(phi_processed)
+            cos_phi = torch.cos(phi_processed)
+            continuous = torch.stack([pt_norm, eta_norm, sin_phi, cos_phi], dim=-1)
+        else:
+            # phi_processed is already normalized to [-1, 1]
+            continuous = torch.stack([pt_norm, eta_norm, phi_processed], dim=-1)
         
         # Get particle ID embedding: (batch, seq, id_embed_dim)
         id_emb = self.particle_id_embedding(particle_id)
@@ -176,11 +227,38 @@ class ParticleTransformer(nn.Module):
     def _normalize_features(
         self, pt: Tensor, eta: Tensor, phi: Tensor
     ) -> Tuple[Tensor, Tensor, Tensor]:
-        """Normalize continuous features to standard ranges."""
+        """
+        Normalize continuous features to standard ranges.
+        
+        Args:
+            pt: Raw pT values (batch, seq)
+            eta: Raw eta values (batch, seq)  
+            phi: Raw phi values in radians (batch, seq)
+        
+        Returns:
+            Tuple of (pt_norm, eta_norm, phi_processed):
+            - pt_norm: pT normalized to [0, 1]
+            - eta_norm: eta normalized to [-1, 1]
+            - phi_processed: For RAW encoding, phi normalized to [-1, 1].
+                            For SINCOS encoding, raw phi (embedding computes sin/cos).
+        """
+        import math
+        
         pt_norm = (pt - self.config.pt_range[0]) / (self.config.pt_range[1] - self.config.pt_range[0])
         eta_norm = 2 * (eta - self.config.eta_range[0]) / (self.config.eta_range[1] - self.config.eta_range[0]) - 1
-        phi_norm = 2 * (phi - self.config.phi_range[0]) / (self.config.phi_range[1] - self.config.phi_range[0]) - 1
-        return pt_norm, eta_norm, phi_norm
+        
+        # Wrap phi to [-π, π] to handle values outside the standard range
+        # This ensures phi and phi + 2πn produce the same result for both encodings
+        phi_wrapped = torch.remainder(phi + math.pi, 2 * math.pi) - math.pi
+        
+        if self.config.phi_encoding == PhiEncoding.RAW:
+            # Normalize wrapped phi to [-1, 1] for RAW encoding
+            phi_processed = 2 * (phi_wrapped - self.config.phi_range[0]) / (self.config.phi_range[1] - self.config.phi_range[0]) - 1
+        else:
+            # For SINCOS, pass wrapped phi - embedding layer computes sin/cos
+            phi_processed = phi_wrapped
+        
+        return pt_norm, eta_norm, phi_processed
     
     def forward(
         self, 
