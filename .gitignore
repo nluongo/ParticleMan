@@ -140,6 +140,9 @@ conda-meta/
 # Weights & Biases
 wandb/
 
+# MLFlow
+mlflow.db
+
 # TensorBoard
 runs/
 logs/

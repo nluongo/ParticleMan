@@ -58,10 +58,10 @@ docs = [
     "sphinx-rtd-theme>=1.3.0",
     "myst-parser>=2.0.0",
 ]
-all = ["particleman[dev,docs]"]
 logging = [
     "mlflow>=3.9.0",
 ]
+all = ["particleman[dev,docs,logging]"]
 
 [project.urls]
 Homepage = "https://github.com/yourusername/particleman"
