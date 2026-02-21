@@ -35,8 +35,8 @@ class ParticleConfig:
     n_particle_types: int = 16  # 0-14 for particles, 15 for unknown/padding
     mask_prob: float = 0.15
     mask_continuous_std: float = 0.1
-    pt_range: Tuple[float, float] = (0.0, 1000.0)  # pt is always positive (normalized to [0, 1])
-    eta_range: Tuple[float, float] = (-5.0, 5.0)   # eta can be +/- (normalized to [-1, 1])
+    pt_range: Tuple[float, float] = (0.0, 1000.0)  # pt is always positive
+    eta_range: Tuple[float, float] = (-5.0, 5.0)   # eta can be +/-
     phi_range: Tuple[float, float] = (-3.14159, 3.14159)  # phi in [-π, π] (normalized to [-1, 1])
     # Embedding configuration
     embedding_type: EmbeddingType = EmbeddingType.JOINT
