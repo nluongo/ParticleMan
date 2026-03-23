@@ -19,8 +19,15 @@ try:
     from .data import (
         ParticleDataset,
         create_dataloaders,
-        DataConfig,
-        load_config,
+        create_datasets,
+    )
+    from .config import (
+        TrainConfig,
+        DataSourceConfig,
+        ModelConfig,
+        TrainingConfig,
+        OutputConfig,
+        DistributedConfig,
     )
     
     __all__ = [
@@ -34,8 +41,14 @@ try:
         # Data
         "ParticleDataset",
         "create_dataloaders",
-        "DataConfig",
-        "load_config",
+        "create_datasets",
+        # Hydra configs
+        "TrainConfig",
+        "DataSourceConfig",
+        "ModelConfig",
+        "TrainingConfig",
+        "OutputConfig",
+        "DistributedConfig",
     ]
 except ImportError:
     # Dependencies not available (e.g., during installation)

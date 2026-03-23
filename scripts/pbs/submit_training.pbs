@@ -95,10 +95,12 @@ fi
 # Training parameters (override via -v flag)
 # ============================================================================
 
-CONFIG=${CONFIG:-"configs/data/mc20_ttbar.yaml"}
+echo "Config: ${CONFIG}"
+CONFIG=${CONFIG:-"configs/mc20_ttbar.yaml"}
 EXPERIMENT_NAME=${EXPERIMENT_NAME:-"ParticleMan_mc20_ttbar"}
 OUTPUT_DIR=${OUTPUT_DIR:-"outputs"}
-EPOCHS=${EPOCHS:-10}
+MAX_EVENTS=${MAX_EVENTS:-"10000"}
+EPOCHS=${EPOCHS:-80}
 BATCH_SIZE=${BATCH_SIZE:-32}  # Per GPU
 LR=${LR:-1e-4}
 D_MODEL=${D_MODEL:-256}
@@ -116,6 +118,7 @@ echo "Training parameters:"
 echo "  Config: ${CONFIG}"
 echo "  Experiment: ${EXPERIMENT_NAME}"
 echo "  Output dir: ${OUTPUT_DIR}"
+echo "  Max events: ${MAX_EVENTS}"
 echo "  Epochs: ${EPOCHS}"
 echo "  Batch size per GPU: ${BATCH_SIZE}"
 echo "  Effective batch size: ${EFFECTIVE_BATCH_SIZE}"
@@ -143,21 +146,23 @@ export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
 # Launch training
 # ============================================================================
 
-TRAIN_SCRIPT="scripts/train_mc20.py"
+TRAIN_SCRIPT="scripts/train.py"
 TRAIN_ARGS="\
-    --config ${CONFIG} \
-    --experiment-name ${EXPERIMENT_NAME} \
-    --output-dir ${OUTPUT_DIR} \
-    --epochs ${EPOCHS} \
-    --batch-size ${BATCH_SIZE} \
-    --lr ${LR} \
-    --d-model ${D_MODEL} \
-    --n-layers ${N_LAYERS} \
-    --n-heads ${N_HEADS} \
-    --dropout ${DROPOUT} \
-    --embedding ${EMBEDDING} \
-    --phi-encoding ${PHI_ENCODING} \
-    --num-workers ${NUM_WORKERS}"
+    --config-name=${CONFIG} \
+    output.experiment_name=${EXPERIMENT_NAME} \
+    output.output_dir=${OUTPUT_DIR} \
+    data.max_events=${MAX_EVENTS} \
+    training.epochs=${EPOCHS} \
+    training.batch_size=${BATCH_SIZE} \
+    training.lr=${LR} \
+    training.num_workers=${NUM_WORKERS} \
+    model.d_model=${D_MODEL} \
+    model.n_layers=${N_LAYERS} \
+    model.n_heads=${N_HEADS} \
+    model.dropout=${DROPOUT} \
+    model.embedding=${EMBEDDING} \
+    model.phi_encoding=${PHI_ENCODING} \
+    "
 
 if [ ${NNODES} -eq 1 ] && [ ${NGPUS_PER_NODE} -eq 1 ]; then
     # Single GPU: run directly

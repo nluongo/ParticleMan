@@ -20,6 +20,7 @@ class PhiEncoding(Enum):
     """How to encode the phi (azimuthal angle) feature."""
     RAW = "raw"        # Use phi directly (normalized to [-1, 1])
     SINCOS = "sincos"  # Use sin(phi) and cos(phi) separately
+    NONE = "none"      # phi excluded from embedding; used with AttentionBiasTransformer
 
 
 @dataclass
@@ -40,9 +41,11 @@ class ParticleConfig:
     phi_range: Tuple[float, float] = (-3.14159, 3.14159)  # phi in [-π, π] (normalized to [-1, 1])
     # Embedding configuration
     embedding_type: EmbeddingType = EmbeddingType.JOINT
-    phi_encoding: PhiEncoding = PhiEncoding.RAW  # How to encode phi: "raw" or "sincos"
+    phi_encoding: PhiEncoding = PhiEncoding.RAW  # How to encode phi: "raw", "sincos", or "none"
     id_embed_dim: int = 32  # Dimension for particle ID embedding (used in JOINT mode)
     embed_hidden_dim: int = 128  # Hidden dimension for embedding MLP (used in JOINT mode)
+    angular_attention_bias: bool = False  # Use AttentionBiasTransformer with pairwise angular bias
+    bias_hidden_dim: int = 32  # Hidden dim for angular attention bias MLP
 
 
 class ConcatEmbedding(nn.Module):
@@ -68,18 +71,25 @@ class ConcatEmbedding(nn.Module):
     def __init__(self, config: ParticleConfig) -> None:
         super().__init__()
         self.config = config
-        feature_dim = config.d_model // 4
-        
-        self.pt_proj = nn.Linear(1, feature_dim)
-        self.eta_proj = nn.Linear(1, feature_dim)
-        
-        # Phi projection depends on encoding type
-        if config.phi_encoding == PhiEncoding.SINCOS:
-            self.phi_proj = nn.Linear(2, feature_dim)  # sin(phi), cos(phi)
+
+        if config.phi_encoding == PhiEncoding.NONE:
+            # Three projections: pt, eta, particle_id
+            feature_dim = config.d_model // 3
+            self.pt_proj = nn.Linear(1, feature_dim)
+            self.eta_proj = nn.Linear(1, feature_dim)
+            # particle_id embedding absorbs rounding remainder
+            id_dim = config.d_model - 2 * feature_dim
+            self.particle_id_embedding = nn.Embedding(config.n_particle_types, id_dim)
         else:
-            self.phi_proj = nn.Linear(1, feature_dim)  # raw phi
-            
-        self.particle_id_embedding = nn.Embedding(config.n_particle_types, feature_dim)
+            feature_dim = config.d_model // 4
+            self.pt_proj = nn.Linear(1, feature_dim)
+            self.eta_proj = nn.Linear(1, feature_dim)
+            # Phi projection depends on encoding type
+            if config.phi_encoding == PhiEncoding.SINCOS:
+                self.phi_proj = nn.Linear(2, feature_dim)  # sin(phi), cos(phi)
+            else:
+                self.phi_proj = nn.Linear(1, feature_dim)  # raw phi
+            self.particle_id_embedding = nn.Embedding(config.n_particle_types, feature_dim)
     
     def forward(
         self, pt_norm: Tensor, eta_norm: Tensor, phi_processed: Tensor, particle_id: Tensor
@@ -99,7 +109,11 @@ class ConcatEmbedding(nn.Module):
         """
         pt_emb = self.pt_proj(pt_norm.unsqueeze(-1))
         eta_emb = self.eta_proj(eta_norm.unsqueeze(-1))
-        
+        pid_emb = self.particle_id_embedding(particle_id)
+
+        if self.config.phi_encoding == PhiEncoding.NONE:
+            return torch.cat([pt_emb, eta_emb, pid_emb], dim=-1)
+
         # Encode phi based on config
         if self.config.phi_encoding == PhiEncoding.SINCOS:
             # Compute sin(phi) and cos(phi) from raw phi
@@ -110,9 +124,7 @@ class ConcatEmbedding(nn.Module):
         else:
             # phi_processed is already normalized to [-1, 1]
             phi_emb = self.phi_proj(phi_processed.unsqueeze(-1))
-        
-        pid_emb = self.particle_id_embedding(particle_id)
-        
+
         return torch.cat([pt_emb, eta_emb, phi_emb, pid_emb], dim=-1)
 
 
@@ -146,8 +158,11 @@ class JointEmbedding(nn.Module):
         # Input dimension depends on phi encoding
         # RAW: pt, eta, phi (3 features)
         # SINCOS: pt, eta, sin(phi), cos(phi) (4 features)
+        # NONE: pt, eta (2 features)
         if config.phi_encoding == PhiEncoding.SINCOS:
             n_continuous = 4  # pt, eta, sin(phi), cos(phi)
+        elif config.phi_encoding == PhiEncoding.NONE:
+            n_continuous = 2  # pt, eta only
         else:
             n_continuous = 3  # pt, eta, phi
         
@@ -183,6 +198,9 @@ class JointEmbedding(nn.Module):
             sin_phi = torch.sin(phi_processed)
             cos_phi = torch.cos(phi_processed)
             continuous = torch.stack([pt_norm, eta_norm, sin_phi, cos_phi], dim=-1)
+        elif self.config.phi_encoding == PhiEncoding.NONE:
+            # phi excluded from embedding
+            continuous = torch.stack([pt_norm, eta_norm], dim=-1)
         else:
             # phi_processed is already normalized to [-1, 1]
             continuous = torch.stack([pt_norm, eta_norm, phi_processed], dim=-1)
@@ -193,6 +211,124 @@ class JointEmbedding(nn.Module):
         # Concatenate and project: (batch, seq, d_model)
         x = torch.cat([continuous, id_emb], dim=-1)
         return self.mlp(x)
+
+class AngularAttentionBias(nn.Module):
+    """Compute pairwise angular attention bias from eta/phi coordinates.
+
+    Produces a learned (batch, n_heads, seq, seq) bias tensor from the
+    pairwise delta_eta, delta_phi, delta_R features via a shallow MLP.
+    The output layer is initialized near zero so the bias starts negligible.
+    """
+
+    def __init__(self, n_heads: int, bias_hidden_dim: int = 32) -> None:
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(4, bias_hidden_dim),  # delta_eta, sin_dphi, cos_dphi, delta_R
+            nn.GELU(),
+            nn.Linear(bias_hidden_dim, n_heads),
+        )
+        # Small initialization so bias starts near zero
+        nn.init.normal_(self.mlp[-1].weight, std=0.01)
+        nn.init.zeros_(self.mlp[-1].bias)
+
+    def forward(self, eta: Tensor, phi: Tensor) -> Tensor:
+        """
+        Args:
+            eta: Physical pseudorapidity (batch, seq)
+            phi: Azimuthal angle in radians, wrapped to [-π, π] (batch, seq)
+
+        Returns:
+            Attention bias of shape (batch, n_heads, seq, seq)
+        """
+        sin_phi = torch.sin(phi)
+        cos_phi = torch.cos(phi)
+        delta_eta = eta.unsqueeze(2) - eta.unsqueeze(1)
+        # Angle-subtraction identities — exact, no modular arithmetic
+        sin_dphi = (sin_phi.unsqueeze(2) * cos_phi.unsqueeze(1)
+                    - cos_phi.unsqueeze(2) * sin_phi.unsqueeze(1))
+        cos_dphi = (cos_phi.unsqueeze(2) * cos_phi.unsqueeze(1)
+                    + sin_phi.unsqueeze(2) * sin_phi.unsqueeze(1))
+        delta_phi = torch.atan2(sin_dphi, cos_dphi)              # exact Δφ in (-π, π]
+        delta_R = torch.sqrt(delta_eta ** 2 + delta_phi ** 2 + 1e-8)
+        features = torch.stack([delta_eta, sin_dphi, cos_dphi, delta_R], dim=-1)
+        bias = self.mlp(features)                                  # (batch, seq, seq, n_heads)
+        return bias.permute(0, 3, 1, 2)                           # (batch, n_heads, seq, seq)
+
+
+class _BiasedTransformerEncoderLayer(nn.TransformerEncoderLayer):
+    """TransformerEncoderLayer that accepts an additive attention bias."""
+
+    def forward(
+        self,
+        src: Tensor,
+        attn_bias: Optional[Tensor] = None,
+        src_key_padding_mask: Optional[Tensor] = None,
+        **kwargs,
+    ) -> Tensor:
+        """
+        Args:
+            src: (batch, seq, d_model)
+            attn_bias: (batch, n_heads, seq, seq) or None
+            src_key_padding_mask: (batch, seq) bool mask (True = padding)
+        """
+        batch, seq, _ = src.shape
+
+        # Reshape bias to (batch*n_heads, seq, seq) for MultiheadAttention
+        attn_mask = None
+        if attn_bias is not None:
+            n_heads = attn_bias.shape[1]
+            attn_mask = attn_bias.reshape(batch * n_heads, seq, seq)
+
+        # Self-attention sub-block (manually mirrors TransformerEncoderLayer internals)
+        if self.norm_first:
+            x = src
+            x = x + self._sa_block(self.norm1(x), attn_mask, src_key_padding_mask)
+            x = x + self._ff_block(self.norm2(x))
+        else:
+            x = self.norm1(src + self._sa_block(src, attn_mask, src_key_padding_mask))
+            x = self.norm2(x + self._ff_block(x))
+        return x
+
+    def _sa_block(
+        self,
+        x: Tensor,
+        attn_mask: Optional[Tensor],
+        key_padding_mask: Optional[Tensor],
+    ) -> Tensor:
+        # Convert bool padding mask to additive float mask to match attn_mask type
+        # and avoid the PyTorch type-mismatch deprecation warning.
+        float_key_padding_mask: Optional[Tensor] = None
+        if key_padding_mask is not None:
+            float_key_padding_mask = torch.zeros_like(key_padding_mask, dtype=x.dtype)
+            float_key_padding_mask = float_key_padding_mask.masked_fill(
+                key_padding_mask, float('-inf')
+            )
+        x, _ = self.self_attn(
+            x, x, x,
+            attn_mask=attn_mask,
+            key_padding_mask=float_key_padding_mask,
+            need_weights=False,
+        )
+        return self.dropout1(x)
+
+
+class _BiasedTransformerEncoder(nn.Module):
+    """Stack of _BiasedTransformerEncoderLayer that threads an attention bias through."""
+
+    def __init__(self, layers: nn.ModuleList) -> None:
+        super().__init__()
+        self.layers = layers
+
+    def forward(
+        self,
+        src: Tensor,
+        attn_bias: Optional[Tensor] = None,
+        src_key_padding_mask: Optional[Tensor] = None,
+    ) -> Tensor:
+        x = src
+        for layer in self.layers:
+            x = layer(x, attn_bias=attn_bias, src_key_padding_mask=src_key_padding_mask)
+        return x
 
 
 class ParticleTransformer(nn.Module):
@@ -254,8 +390,11 @@ class ParticleTransformer(nn.Module):
         if self.config.phi_encoding == PhiEncoding.RAW:
             # Normalize wrapped phi to [-1, 1] for RAW encoding
             phi_processed = 2 * (phi_wrapped - self.config.phi_range[0]) / (self.config.phi_range[1] - self.config.phi_range[0]) - 1
-        else:
+        elif self.config.phi_encoding == PhiEncoding.SINCOS:
             # For SINCOS, pass wrapped phi - embedding layer computes sin/cos
+            phi_processed = phi_wrapped
+        else:  # NONE
+            # Pass raw wrapped radians; embedding ignores phi, bias uses it
             phi_processed = phi_wrapped
         
         return pt_norm, eta_norm, phi_processed
@@ -392,6 +531,8 @@ class ParticleTransformer(nn.Module):
         Compute pre-training loss.
         
         Loss is only computed on masked positions (real particles that were masked).
+        Continuous targets (pt, eta, phi) are normalized to match the scale of 
+        model predictions, ensuring balanced loss contributions.
         
         Args:
             predictions: Model predictions dictionary.
@@ -404,9 +545,14 @@ class ParticleTransformer(nn.Module):
         device = predictions['pt'].device
         
         if mask.sum() > 0:
-            pt_loss = F.mse_loss(predictions['pt'][mask], targets['pt'][mask])
-            eta_loss = F.mse_loss(predictions['eta'][mask], targets['eta'][mask])
-            phi_loss = F.mse_loss(predictions['phi'][mask], targets['phi'][mask])
+            # Normalize targets to match prediction scale
+            pt_norm, eta_norm, phi_norm = self._normalize_features(
+                targets['pt'], targets['eta'], targets['phi']
+            )
+            
+            pt_loss = F.mse_loss(predictions['pt'][mask], pt_norm[mask])
+            eta_loss = F.mse_loss(predictions['eta'][mask], eta_norm[mask])
+            phi_loss = F.mse_loss(predictions['phi'][mask], phi_norm[mask])
             particle_id_loss = F.cross_entropy(
                 predictions['particle_id'][mask], 
                 targets['particle_id'][mask]
@@ -425,4 +571,70 @@ class ParticleTransformer(nn.Module):
             'eta_loss': eta_loss,
             'phi_loss': phi_loss,
             'particle_id_loss': particle_id_loss
+        }
+
+
+class AttentionBiasTransformer(ParticleTransformer):
+    """ParticleTransformer variant with phi-translation-invariant attention bias.
+
+    Removes phi from the particle embedding (requires ``phi_encoding=NONE``) and
+    instead injects a pairwise angular bias computed from (delta_eta, delta_phi,
+    delta_R) into every attention layer.  The embedding + bias combination is
+    phi-translation invariant: shifting all phis by a constant leaves the hidden
+    states unchanged.
+    """
+
+    def __init__(self, config: ParticleConfig) -> None:
+        if config.phi_encoding != PhiEncoding.NONE:
+            raise ValueError(
+                f"AttentionBiasTransformer requires phi_encoding=NONE to enforce "
+                f"phi-translation invariance, got {config.phi_encoding}"
+            )
+        super().__init__(config)  # builds phi-free embedding when phi_encoding=NONE
+
+        # Replace the standard transformer with the bias-aware version
+        biased_layers = nn.ModuleList([
+            _BiasedTransformerEncoderLayer(
+                d_model=config.d_model,
+                nhead=config.n_heads,
+                dim_feedforward=config.d_ff,
+                dropout=config.dropout,
+                batch_first=True,
+            )
+            for _ in range(config.n_layers)
+        ])
+        self.transformer = _BiasedTransformerEncoder(biased_layers)
+
+        self.angular_bias = AngularAttentionBias(config.n_heads, config.bias_hidden_dim)
+
+    def forward(
+        self,
+        pt: Tensor,
+        eta: Tensor,
+        phi: Tensor,
+        particle_id: Tensor,
+        padding_mask: Optional[Tensor] = None,
+    ) -> Dict[str, Tensor]:
+        # Normalize features; phi_processed = wrapped radians (embedding ignores it)
+        pt_norm, eta_norm, phi_processed = self._normalize_features(pt, eta, phi)
+
+        # Build embeddings (phi excluded when phi_encoding=NONE)
+        embeddings = self.embedding(pt_norm, eta_norm, phi_processed, particle_id)
+
+        # Compute pairwise angular bias from physical eta and wrapped phi
+        attn_bias = self.angular_bias(eta, phi_processed)
+
+        # Run biased transformer
+        hidden_states = self.transformer(
+            embeddings,
+            attn_bias=attn_bias,
+            src_key_padding_mask=padding_mask,
+        )
+
+        return {
+            'pt': self.pt_head(hidden_states).squeeze(-1),
+            'eta': self.eta_head(hidden_states).squeeze(-1),
+            'phi': self.phi_head(hidden_states).squeeze(-1),
+            'particle_id': self.particle_id_head(hidden_states),
+            'hidden_states': hidden_states,
         }

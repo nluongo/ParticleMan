@@ -51,6 +51,7 @@ class ParticleTrainer:
         save_dir: Optional[Path] = None,
         experiment_logger: Optional[BaseLogger] = None,
         gradient_accumulation_steps: int = 1,
+        max_mask_attempts: int = 5,
     ) -> None:
         """
         Initialize the trainer.
@@ -69,6 +70,7 @@ class ParticleTrainer:
             save_dir: Directory to save checkpoints
             experiment_logger: Logger for experiment tracking (MLflow, Comet, etc.)
             gradient_accumulation_steps: Number of steps to accumulate gradients
+            max_mask_attempts: Maximum attempts to create a non-empty mask before skipping batch
         """
         self.num_epochs = num_epochs
         self.rank = rank
@@ -76,6 +78,7 @@ class ParticleTrainer:
         self.is_main = is_main_process(rank)
         self.is_distributed = world_size > 1
         self.gradient_accumulation_steps = gradient_accumulation_steps
+        self.max_mask_attempts = max_mask_attempts
         
         self.train_dataloader = train_dataloader
         self.val_dataloader = val_dataloader
@@ -132,7 +135,37 @@ class ParticleTrainer:
             return self.model.module
         return self.model
     
-    def train_step(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
+    def _create_masks_with_retry(
+        self,
+        pt: torch.Tensor,
+        eta: torch.Tensor,
+        phi: torch.Tensor,
+        particle_id: torch.Tensor,
+        padding_mask: torch.Tensor,
+    ) -> Optional[tuple]:
+        """
+        Create masks for prediction with retry logic for empty masks.
+        
+        Args:
+            pt, eta, phi, particle_id: Particle features on device
+            padding_mask: Boolean mask where True = padding
+            
+        Returns:
+            Tuple of (masked_inputs, mask_targets) if successful, None if all attempts failed
+        """
+        raw_model = self._get_model_for_inference()
+        
+        for _ in range(self.max_mask_attempts):
+            masked_inputs, mask_targets = raw_model.create_masks(
+                pt, eta, phi, particle_id,
+                padding_mask=padding_mask
+            )
+            if mask_targets['mask'].sum() > 0:
+                return masked_inputs, mask_targets
+        
+        return None
+    
+    def train_step(self, batch: Dict[str, torch.Tensor]) -> Optional[Dict[str, float]]:
         """
         Perform a single training step.
         
@@ -142,7 +175,7 @@ class ParticleTrainer:
                 - mask: Boolean mask where True = real particle, False = padding
             
         Returns:
-            Dictionary of loss values
+            Dictionary of loss values, or None if batch was skipped (empty mask)
         """
         self.model.train()
         
@@ -157,14 +190,20 @@ class ParticleTrainer:
         real_particle_mask = batch['mask'].to(self.device)
         padding_mask = ~real_particle_mask  # Invert: True = padding
         
-        # Get the raw model for create_masks (DDP wrapper doesn't have this method)
-        raw_model = self._get_model_for_inference()
-        
-        # Create masks for prediction (only mask real particles)
-        masked_inputs, mask_targets = raw_model.create_masks(
-            pt, eta, phi, particle_id, 
-            padding_mask=padding_mask
+        # Create masks for prediction with retry logic for empty masks
+        mask_result = self._create_masks_with_retry(
+            pt, eta, phi, particle_id, padding_mask
         )
+        
+        # Skip batch if no valid mask could be created
+        if mask_result is None:
+            logger.warning(
+                f"Skipping batch: no particles masked after {self.max_mask_attempts} attempts. "
+                f"Real particles in batch: {real_particle_mask.sum().item()}"
+            )
+            return None
+        
+        masked_inputs, mask_targets = mask_result
         
         # Forward pass with masked inputs and padding mask
         predictions = self.model(
@@ -176,10 +215,16 @@ class ParticleTrainer:
         )
         
         # Compute loss (only on masked real particles)
+        raw_model = self._get_model_for_inference()
         losses = raw_model.compute_loss(predictions, mask_targets)
         
         # Scale loss for gradient accumulation
         loss = losses['total_loss'] / self.gradient_accumulation_steps
+        
+        # Skip backward pass if loss is zero (shouldn't happen after mask check, but guard anyway)
+        if loss.item() == 0.0:
+            logger.warning("Skipping backward pass: loss is zero")
+            return {k: v.item() for k, v in losses.items()}
         
         # Backward pass
         loss.backward()
@@ -211,6 +256,7 @@ class ParticleTrainer:
             'particle_id_loss': 0.0
         }
         num_batches = 0
+        skipped_batches = 0
         
         with torch.no_grad():
             for batch in dataloader:
@@ -224,11 +270,17 @@ class ParticleTrainer:
                 real_particle_mask = batch['mask'].to(self.device)
                 padding_mask = ~real_particle_mask
                 
-                # Create masks
-                masked_inputs, mask_targets = raw_model.create_masks(
-                    pt, eta, phi, particle_id,
-                    padding_mask=padding_mask
+                # Create masks with retry logic
+                mask_result = self._create_masks_with_retry(
+                    pt, eta, phi, particle_id, padding_mask
                 )
+                
+                # Skip batch if no valid mask could be created
+                if mask_result is None:
+                    skipped_batches += 1
+                    continue
+                
+                masked_inputs, mask_targets = mask_result
                 
                 # Forward pass
                 predictions = self.model(
@@ -247,6 +299,11 @@ class ParticleTrainer:
                     total_losses[k] += v.item()
                 
                 num_batches += 1
+        
+        if skipped_batches > 0:
+            logger.warning(
+                f"Skipped {skipped_batches} batches during evaluation due to empty masks"
+            )
         
         # Average losses locally
         if num_batches > 0:
@@ -333,7 +390,7 @@ class ParticleTrainer:
 
         for epoch in range(num_epochs):
             self.epoch = epoch
-            epoch_losses = []
+            batch_losses = []
             
             # Set epoch for distributed sampler (ensures different shuffling each epoch)
             if hasattr(self.train_dataloader, 'sampler') and \
@@ -350,7 +407,12 @@ class ParticleTrainer:
             
             for batch_idx, batch in enumerate(pbar):
                 losses = self.train_step(batch)
-                epoch_losses.append(losses)
+                
+                # Skip if batch was skipped (empty mask)
+                if losses is None:
+                    continue
+                
+                batch_losses.append(losses)
                 
                 # Gradient accumulation: step optimizer every N batches
                 if (batch_idx + 1) % self.gradient_accumulation_steps == 0:
@@ -363,8 +425,9 @@ class ParticleTrainer:
                     self.step += 1
                     
                     # Log training stats (only on main process)
-                    if self.is_main and self.step % self.log_interval == 0 and len(epoch_losses) >= self.log_interval:
-                        avg_loss = sum(l['total_loss'] for l in epoch_losses[-self.log_interval:]) / self.log_interval
+                    if self.is_main and self.step % self.log_interval == 0 and len(batch_losses) > 0:
+                        recent_losses = batch_losses[-self.log_interval:]
+                        avg_loss = sum(l['total_loss'] for l in recent_losses) / len(recent_losses)
                         lr = self.scheduler.get_last_lr()[0]
                         pbar.set_postfix({'loss': f"{avg_loss:.4f}", 'lr': f"{lr:.2e}"})
                         
