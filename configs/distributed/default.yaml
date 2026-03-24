@@ -1,0 +1,6 @@
+# @package distributed
+#
+# Default distributed training configuration for ParticleMan
+
+# Backend: "nccl" (GPU, recommended) or "gloo" (CPU)
+backend: nccl

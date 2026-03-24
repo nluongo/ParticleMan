@@ -1,0 +1,31 @@
+# ParticleMan Training Configuration: mc20 ttbar
+#
+# This is the root configuration that composes all sub-configs.
+#
+# Usage:
+#   python scripts/train_mc20.py --config-name=mc20_ttbar
+#
+# Override any value via CLI:
+#   python scripts/train_mc20.py --config-name=mc20_ttbar training.epochs=20
+#
+# Switch sub-configs:
+#   python scripts/train_mc20.py --config-name=mc20_ttbar model=default
+
+defaults:
+  - data: mc20_ttbar
+  - model: joint_sincos
+  - training: default
+  - output: mc20_ttbar
+  - distributed: default
+  - _self_
+
+# Hydra configuration
+hydra:
+  run:
+    # Disable Hydra's automatic output directory management
+    # We use OutputManager instead for consistent output structure
+    dir: .
+  output_subdir: null
+  job:
+    # Don't change working directory
+    chdir: false

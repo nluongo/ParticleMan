@@ -1,0 +1,15 @@
+# @package training
+#
+# Quick test training configuration
+# Uses fewer epochs and smaller batches for fast iteration.
+#
+# Usage:
+#   python scripts/train_mc20.py training=quick_test
+
+epochs: 2
+batch_size: 64
+lr: 1.0e-4
+weight_decay: 0.01
+mask_prob: 0.15
+num_workers: 0
+gradient_accumulation_steps: 1

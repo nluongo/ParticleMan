@@ -1,0 +1,18 @@
+# @package model
+#
+# Model architecture for joint embedding and sincos phi encoding
+
+# Embedding type: "joint" (Particle Transformer style) or "concat"
+embedding: joint
+# Phi encoding: "raw" (normalized) or "sincos" (sin/cos components)
+phi_encoding: sincos
+
+angular_attention_bias: False
+bias_hidden_dim: 8
+
+
+# Transformer architecture
+d_model: 128
+n_heads: 2
+n_layers: 2
+dropout: 0.1

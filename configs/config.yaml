@@ -1,0 +1,7 @@
+defaults:
+  - data: default.yaml
+  - model: default.yaml
+  - training: default.yaml
+  - output: default.yaml
+  - distributed: default.yaml
+  - _self_

@@ -1,0 +1,16 @@
+# @package output
+#
+# Output configuration for mc20 ttbar experiments
+
+# Base directory for all outputs (checkpoints, logs, etc.)
+output_dir: outputs
+
+# Experiment name (groups related runs)
+experiment_name: ParticleMan_mc20_ttbar
+# Run name (null for auto-generated timestamp)
+run_name: null
+
+# How often to log training stats (in steps)
+log_interval: 1
+# Experiment logger: "mlflow", "comet", "noop", or "none"
+experiment_logger: mlflow

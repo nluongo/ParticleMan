@@ -1,0 +1,17 @@
+# @package model
+#
+# Model architecture for transformer with angular attention bias
+
+# Embedding type: "joint" (Particle Transformer style) or "concat"
+embedding: joint
+# Phi encoding: "raw" (normalized) or "sincos" (sin/cos components)
+phi_encoding: none
+
+angular_attention_bias: True
+bias_hidden_dim: 8
+
+# Transformer architecture
+d_model: 128
+n_heads: 2
+n_layers: 2
+dropout: 0.1

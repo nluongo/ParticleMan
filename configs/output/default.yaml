@@ -1,0 +1,16 @@
+# @package output
+#
+# Default output and logging configuration for ParticleMan
+
+# Base directory for all outputs (checkpoints, logs, etc.)
+output_dir: outputs
+
+# Experiment name (groups related runs)
+experiment_name: ParticleMan
+# Run name (null for auto-generated timestamp)
+run_name: null
+
+# How often to log training stats (in steps)
+log_interval: 1
+# Experiment logger: "mlflow", "comet", "noop", or "none"
+experiment_logger: mlflow
