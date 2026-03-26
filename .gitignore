@@ -166,7 +166,6 @@ Thumbs.db
 # Project specific
 experiments/
 outputs/
-data/
 checkpoints/
 *.pkl
 *.pickle
