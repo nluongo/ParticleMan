@@ -1,0 +1,87 @@
+# Default data configuration template for ParticleMan
+
+#
+# This file serves as a template for configuring particle data loading.
+# Copy this file and modify for your specific dataset.
+
+# Data source configuration
+source:
+  type: "hdf5"  # "root" or "hdf5"
+  files:
+    - "data/particles.h5"
+  tree_name: "CollectionTree"  # Only used for ROOT files
+
+# Particle collections
+# Each collection maps to columns in the source file.
+# All enabled collections are combined into a single particle list per event.
+collections:
+  # Example: Simple HDF5 with pt/eta/phi/particle_id columns
+  particles:
+    enabled: true
+    columns:
+      pt: "pt"
+      eta: "eta"
+      phi: "phi"
+      particle_id: "particle_id"
+    # fixed_particle_id: null  # Use column instead
+    is_vector: false  # True if variable-length arrays per event
+
+# Particle ID mapping (PDG code → categorical ID)
+# Maps raw particle IDs from the file to model-friendly categories
+particle_id_map:
+  # Leptons
+  11: 0    # electron
+  -11: 0   # positron
+  13: 1    # muon
+  -13: 1   # antimuon
+  15: 2    # tau
+  -15: 2   # antitau
+  # Neutrinos
+  12: 3    # electron neutrino
+  -12: 3
+  14: 4    # muon neutrino
+  -14: 4
+  16: 5    # tau neutrino
+  -16: 5
+  # Photon
+  22: 6    # photon
+  # Light hadrons
+  211: 7   # charged pion
+  -211: 7
+  111: 8   # neutral pion
+  321: 9   # charged kaon
+  -321: 9
+  130: 10  # K_L
+  310: 10  # K_S
+  # Baryons
+  2212: 11  # proton
+  -2212: 11
+  2112: 12  # neutron
+  -2112: 12
+  # Heavy mesons
+  511: 13   # B mesons
+  -511: 13
+  521: 13
+  -521: 13
+  411: 14   # D mesons
+  -411: 14
+  421: 14
+  -421: 14
+
+# Default ID for particles not in the map
+default_particle_id: 15
+
+# Preprocessing applied after combining all collections
+preprocessing:
+  pt_cut: 0.5           # Minimum pT in GeV
+  eta_cut: 5.0          # Maximum |eta|
+  max_particles: 200    # Maximum particles per event
+  pt_scale: 1.0         # Divide pT by this (e.g., 1000 for MeV→GeV)
+  shuffle_particles: true  # Randomly shuffle particle order
+
+# Data splitting for train/val/test
+split:
+  train: 0.8
+  val: 0.1
+  test: 0.1
+  seed: 42

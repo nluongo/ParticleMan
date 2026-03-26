@@ -1,0 +1,110 @@
+# Configuration for ATLAS PHYSLITE flat ntuples
+#
+# This configuration is designed for DAOD_PHYSLITE derived data format
+# commonly used in ATLAS physics analyses.
+
+source:
+  type: "root"
+  files:
+    - "mc20_13TeV.*.root"  # Glob pattern supported
+  tree_name: "CollectionTree"
+
+# Multiple particle collections from PHYSLITE
+collections:
+  # Reconstructed electrons
+  electrons:
+    enabled: true
+    columns:
+      pt: "AnalysisElectronsAuxDyn.pt"
+      eta: "AnalysisElectronsAuxDyn.eta"
+      phi: "AnalysisElectronsAuxDyn.phi"
+    fixed_particle_id: 0  # electron category
+    is_vector: true
+
+  # Reconstructed muons
+  muons:
+    enabled: true
+    columns:
+      pt: "AnalysisMuonsAuxDyn.pt"
+      eta: "AnalysisMuonsAuxDyn.eta"
+      phi: "AnalysisMuonsAuxDyn.phi"
+    fixed_particle_id: 1  # muon category
+    is_vector: true
+
+  # Reconstructed jets (with flavor tagging)
+  jets:
+    enabled: true
+    columns:
+      pt: "AnalysisJetsAuxDyn.pt"
+      eta: "AnalysisJetsAuxDyn.eta"
+      phi: "AnalysisJetsAuxDyn.phi"
+      particle_id: "AnalysisJetsAuxDyn.PartonTruthLabelID"
+    is_vector: true
+
+  # Reconstructed photons
+  photons:
+    enabled: true
+    columns:
+      pt: "AnalysisPhotonsAuxDyn.pt"
+      eta: "AnalysisPhotonsAuxDyn.eta"
+      phi: "AnalysisPhotonsAuxDyn.phi"
+    fixed_particle_id: 6  # photon category
+    is_vector: true
+
+  # Reconstructed taus
+  taus:
+    enabled: false  # Disable if not needed
+    columns:
+      pt: "AnalysisTauJetsAuxDyn.pt"
+      eta: "AnalysisTauJetsAuxDyn.eta"
+      phi: "AnalysisTauJetsAuxDyn.phi"
+    fixed_particle_id: 2  # tau category
+    is_vector: true
+
+  # Missing transverse energy (as single "particle")
+  met:
+    enabled: false  # Enable if you want MET as a particle
+    columns:
+      pt: "MET_Core_AnalysisMET.met"
+      eta: "MET_Core_AnalysisMET.eta"  # Usually 0
+      phi: "MET_Core_AnalysisMET.phi"
+    fixed_particle_id: 16  # Special MET category
+    is_vector: false
+
+# Particle ID mapping for jet flavor labels
+# PartonTruthLabelID values from ATLAS
+particle_id_map:
+  # Jet flavor labels (from PartonTruthLabelID)
+  0: 7    # light jet / undefined → pion-like
+  1: 7    # down quark jet
+  2: 7    # up quark jet
+  3: 7    # strange quark jet
+  4: 14   # charm jet → D meson category
+  5: 13   # bottom jet → B meson category
+  21: 7   # gluon jet → pion-like
+  
+  # Standard PDG codes (if using truth particles)
+  11: 0    # electron
+  -11: 0
+  13: 1    # muon
+  -13: 1
+  15: 2    # tau
+  -15: 2
+  22: 6    # photon
+  211: 7   # pion
+  -211: 7
+
+default_particle_id: 15
+
+preprocessing:
+  pt_cut: 0.5           # Minimum pT in GeV (after scaling)
+  eta_cut: 5.0          # Maximum |eta|
+  max_particles: 200    # Maximum particles per event
+  pt_scale: 1000.0      # PHYSLITE stores pT in MeV
+  shuffle_particles: true
+
+split:
+  train: 0.8
+  val: 0.1
+  test: 0.1
+  seed: 42

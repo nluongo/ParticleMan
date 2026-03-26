@@ -1,0 +1,64 @@
+# Configuration for preprocessed HDF5 files
+#
+# This configuration is for HDF5 files that have already been converted
+# from ROOT using convert_xaod_to_h5.py or similar preprocessing.
+#
+# Expected HDF5 structure:
+#   - pt: (n_events, max_particles) float32
+#   - eta: (n_events, max_particles) float32
+#   - phi: (n_events, max_particles) float32
+#   - particle_id: (n_events, max_particles) int32
+#   - is_truth: (n_events, max_particles) bool (optional)
+
+source:
+  type: "hdf5"
+  files:
+    - "tester.h5"
+  tree_name: ""  # Not used for HDF5
+
+# Single collection since data is already preprocessed
+collections:
+  particles:
+    enabled: true
+    columns:
+      pt: "pt"
+      eta: "eta"
+      phi: "phi"
+      particle_id: "particle_id"
+    is_vector: false  # Data is already padded to fixed size
+
+# Particle ID mapping
+# For preprocessed files, IDs are already mapped, so use identity mapping
+# or leave empty if no remapping is needed
+particle_id_map:
+  0: 0    # electron
+  1: 1    # muon
+  2: 2    # tau
+  3: 3    # electron neutrino
+  4: 4    # muon neutrino
+  5: 5    # tau neutrino
+  6: 6    # photon
+  7: 7    # charged pion
+  8: 8    # neutral pion
+  9: 9    # charged kaon
+  10: 10  # neutral kaon
+  11: 11  # proton
+  12: 12  # neutron
+  13: 13  # B meson
+  14: 14  # D meson
+  15: 15  # other/unknown
+
+default_particle_id: 15
+
+preprocessing:
+  pt_cut: 0.0           # Already preprocessed, no cut needed
+  eta_cut: 999.0        # Already preprocessed, no cut needed
+  max_particles: 200    # Should match the HDF5 file's max_particles
+  pt_scale: 1.0         # Already in GeV
+  shuffle_particles: false  # Keep original order from preprocessing
+
+split:
+  train: 0.8
+  val: 0.1
+  test: 0.1
+  seed: 42
