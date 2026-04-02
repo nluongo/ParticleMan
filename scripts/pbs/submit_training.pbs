@@ -1,8 +1,4 @@
 #!/bin/bash
-#PBS -A ATLAS-HEP-GROUP
-#PBS -N particleman_train
-#PBS -l walltime=4:00:00
-#PBS -q backfill
 #PBS -j oe
 
 # ============================================================================
@@ -13,18 +9,13 @@
 # Automatically uses torchrun for distributed training when multiple GPUs
 # or nodes are detected.
 #
-# Resource Selection (set via -l flag or modify defaults below):
-#   Single GPU:   qsub -l select=1:ngpus=1 scripts/pbs/submit_training.pbs
-#   Multi-GPU:    qsub -l select=1:ngpus=4 scripts/pbs/submit_training.pbs
-#   Multi-node:   qsub -l select=2:ngpus=4 scripts/pbs/submit_training.pbs
+# This script is intended to be submitted via scripts/submit.py, which sets
+# PBS resource flags (-A, -N, -q, -l walltime, -l select) and passes all
+# training configuration as a single HYDRA_ARGS environment variable.
 #
-# Training Parameters (override via -v flag):
-#   qsub -v EPOCHS=20,BATCH_SIZE=64,LR=1e-3 scripts/pbs/submit_training.pbs
-#
-# Full example:
-#   qsub -l select=2:ncpus=16:ngpus=4:mem=64gb \
-#        -v EXPERIMENT_NAME=my_exp,EPOCHS=50 \
-#        scripts/pbs/submit_training.pbs
+# Usage:
+#   python scripts/submit.py data=bbllv08 training.epochs=80
+#   python scripts/submit.py --pbs multi_gpu data=bbllv08 model.d_model=256
 #
 # Output directory structure (managed by OutputManager):
 #   outputs/<experiment_name>/<timestamp>_pbs<jobid>/
@@ -73,7 +64,7 @@ else
     MASTER_ADDR="localhost"
 fi
 
-# Get GPUs per node: use NGPUS_PER_NODE if set, otherwise detect
+# Get GPUs per node: set by submit.py via -v NGPUS_PER_NODE=N, otherwise detect
 if [ -z "${NGPUS_PER_NODE}" ]; then
     NGPUS_PER_NODE=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | wc -l || echo 1)
 fi
@@ -92,46 +83,6 @@ if [ ${NNODES} -gt 1 ]; then
 fi
 
 # ============================================================================
-# Training parameters (override via -v flag)
-# ============================================================================
-
-echo "Config: ${CONFIG}"
-CONFIG=${CONFIG:-"configs/mc20_ttbar.yaml"}
-EXPERIMENT_NAME=${EXPERIMENT_NAME:-"ParticleMan_mc20_ttbar"}
-OUTPUT_DIR=${OUTPUT_DIR:-"outputs"}
-MAX_EVENTS=${MAX_EVENTS:-"10000"}
-EPOCHS=${EPOCHS:-80}
-BATCH_SIZE=${BATCH_SIZE:-32}  # Per GPU
-LR=${LR:-1e-4}
-D_MODEL=${D_MODEL:-256}
-N_LAYERS=${N_LAYERS:-6}
-N_HEADS=${N_HEADS:-8}
-DROPOUT=${DROPOUT:-0.1}
-EMBEDDING=${EMBEDDING:-"joint"}
-PHI_ENCODING=${PHI_ENCODING:-"sincos"}
-NUM_WORKERS=${NUM_WORKERS:-4}
-
-EFFECTIVE_BATCH_SIZE=$((BATCH_SIZE * TOTAL_GPUS))
-
-echo ""
-echo "Training parameters:"
-echo "  Config: ${CONFIG}"
-echo "  Experiment: ${EXPERIMENT_NAME}"
-echo "  Output dir: ${OUTPUT_DIR}"
-echo "  Max events: ${MAX_EVENTS}"
-echo "  Epochs: ${EPOCHS}"
-echo "  Batch size per GPU: ${BATCH_SIZE}"
-echo "  Effective batch size: ${EFFECTIVE_BATCH_SIZE}"
-echo "  Learning rate: ${LR}"
-echo "  Model dim: ${D_MODEL}"
-echo "  Layers: ${N_LAYERS}"
-echo "  Heads: ${N_HEADS}"
-echo "  Dropout: ${DROPOUT}"
-echo "  Embedding: ${EMBEDDING}"
-echo "  Phi encoding: ${PHI_ENCODING}"
-echo ""
-
-# ============================================================================
 # Set environment variables
 # ============================================================================
 
@@ -147,27 +98,21 @@ export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
 # ============================================================================
 
 TRAIN_SCRIPT="scripts/train.py"
-TRAIN_ARGS="\
-    --config-name=${CONFIG} \
-    output.experiment_name=${EXPERIMENT_NAME} \
-    output.output_dir=${OUTPUT_DIR} \
-    data.max_events=${MAX_EVENTS} \
-    training.epochs=${EPOCHS} \
-    training.batch_size=${BATCH_SIZE} \
-    training.lr=${LR} \
-    training.num_workers=${NUM_WORKERS} \
-    model.d_model=${D_MODEL} \
-    model.n_layers=${N_LAYERS} \
-    model.n_heads=${N_HEADS} \
-    model.dropout=${DROPOUT} \
-    model.embedding=${EMBEDDING} \
-    model.phi_encoding=${PHI_ENCODING} \
-    "
+
+if [ -z "${HYDRA_ARGS}" ]; then
+    echo "ERROR: HYDRA_ARGS environment variable is not set."
+    echo "Use scripts/submit.py to submit jobs, not this script directly."
+    exit 1
+fi
+
+echo ""
+echo "Hydra overrides: ${HYDRA_ARGS}"
+echo ""
 
 if [ ${NNODES} -eq 1 ] && [ ${NGPUS_PER_NODE} -eq 1 ]; then
     # Single GPU: run directly
     echo "Running single-GPU training..."
-    python ${TRAIN_SCRIPT} ${TRAIN_ARGS}
+    python ${TRAIN_SCRIPT} ${HYDRA_ARGS}
 
 elif [ ${NNODES} -eq 1 ]; then
     # Single node, multi-GPU: use torchrun standalone
@@ -175,12 +120,12 @@ elif [ ${NNODES} -eq 1 ]; then
     torchrun \
         --standalone \
         --nproc_per_node=${NGPUS_PER_NODE} \
-        ${TRAIN_SCRIPT} ${TRAIN_ARGS}
+        ${TRAIN_SCRIPT} ${HYDRA_ARGS}
 
 else
     # Multi-node: use torchrun with rendezvous
     echo "Running multi-node training..."
-    
+
     # Get this node's rank
     HOSTNAME=$(hostname)
     NODE_RANK=0
@@ -190,27 +135,30 @@ else
             break
         fi
     done
-    
+
     echo "This node: ${HOSTNAME}, rank: ${NODE_RANK}"
-    
+
     torchrun \
         --nnodes=${NNODES} \
         --nproc_per_node=${NGPUS_PER_NODE} \
         --node_rank=${NODE_RANK} \
         --master_addr=${MASTER_ADDR} \
         --master_port=${MASTER_PORT} \
-        ${TRAIN_SCRIPT} ${TRAIN_ARGS}
+        ${TRAIN_SCRIPT} ${HYDRA_ARGS}
 fi
 
 echo ""
 echo "=============================================="
 echo "Training completed at: $(date)"
-echo "Outputs saved to: ${OUTPUT_DIR}/${EXPERIMENT_NAME}/"
 echo "=============================================="
 
 # ============================================================================
 # Copy PBS output file to run directory
 # ============================================================================
+
+# Parse output_dir and experiment_name from HYDRA_ARGS (fall back to defaults)
+OUTPUT_DIR=$(echo "${HYDRA_ARGS}" | grep -oP 'output\.output_dir=\K\S+' || echo "outputs")
+EXPERIMENT_NAME=$(echo "${HYDRA_ARGS}" | grep -oP 'output\.experiment_name=\K\S+' || echo "ParticleMan")
 
 PBS_JOB_NUM=$(echo "${PBS_JOBID}" | cut -d'.' -f1)
 
