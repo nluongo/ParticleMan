@@ -1,0 +1,20 @@
+Current Implementation: Whole-Particle Masking
+
+The masking strategy operates at the particle level, not the feature level. When a particle
+is selected for masking, ALL of its features (pT, eta, phi, particle_id) are corrupted
+simultaneously.
+
+How it works:
+1. A random mask is generated per particle with probability `mask_prob` (default 0.15)
+2. For masked particles, continuous features (pT, eta, phi) are corrupted by adding
+   Gaussian noise with standard deviation `mask_continuous_std` (default 0.1)
+3. The particle_id is replaced with a special mask token (last ID in vocabulary)
+4. Padding positions are never masked and never contribute to loss
+
+The model then predicts the original values for all masked positions. Loss is computed
+only on masked real particles, with continuous targets normalized to match prediction scale.
+
+Key characteristics:
+- Granularity: Per-particle (entire particle masked at once)
+- Corruption method: Gaussian noise for continuous features, token replacement for ID
+- No mask indicator is passed to the embedding layer 

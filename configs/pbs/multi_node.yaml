@@ -1,0 +1,11 @@
+queue: regular
+account: ATLAS-HEP-GROUP
+job_name: particleman_train
+walltime: "12:00:00"
+nnodes: 2
+ncpus: 16
+ngpus: 4
+mem: "64gb"
+master_port: 29500
+omp_num_threads: 8
+nccl_debug: WARN
