@@ -1,0 +1,3 @@
+defaults:
+  - pbs: default
+  - _self_
