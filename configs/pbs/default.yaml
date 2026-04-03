@@ -9,3 +9,5 @@ mem: "32gb"
 master_port: 29500
 omp_num_threads: 8
 nccl_debug: WARN
+launcher: torchrun
+machine: unknown

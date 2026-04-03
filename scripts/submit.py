@@ -108,6 +108,7 @@ def build_qsub_command(pbs, train_overrides: list[str], config_name: str = "conf
         f"MASTER_PORT={pbs.master_port}",
         f"OMP_NUM_THREADS={pbs.omp_num_threads}",
         f"NCCL_DEBUG={pbs.nccl_debug}",
+        f"LAUNCHER={pbs.launcher}",
     ])
 
     return [
