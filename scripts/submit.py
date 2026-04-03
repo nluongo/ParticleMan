@@ -98,6 +98,13 @@ def build_select_string(pbs) -> str:
     return out
 
 
+def build_filesystems_string(pbs) -> str:
+    out = ""
+    if pbs.get("filesystems", None):
+        out = f"-l filesystems={pbs.filesystems}"
+    return out
+
+
 def build_qsub_command(pbs, train_overrides: list[str], config_name: str = "config") -> list[str]:
     cn_prefix = [f"--config-name {config_name}"] if config_name != "config" else []
     hydra_args_str = " ".join(cn_prefix + train_overrides)
@@ -118,6 +125,7 @@ def build_qsub_command(pbs, train_overrides: list[str], config_name: str = "conf
         "-q", pbs.queue,
         "-l", f"walltime={pbs.walltime}",
         "-l", build_select_string(pbs),
+        build_filesystems_string(pbs),
         #"-j", "oe",
         "-v", v_vars,
         str(PBS_SCRIPT),
