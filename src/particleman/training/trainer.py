@@ -7,11 +7,13 @@ training.
 """
 
 import logging
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Dict, Optional, Union
 
 import torch
 from torch.optim import AdamW
+from torch.profiler import ProfilerActivity
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -52,10 +54,12 @@ class ParticleTrainer:
         experiment_logger: Optional[BaseLogger] = None,
         gradient_accumulation_steps: int = 1,
         max_mask_attempts: int = 5,
+        profile: bool = False,
+        profile_dir: Optional[Path] = None,
     ) -> None:
         """
         Initialize the trainer.
-        
+
         Args:
             model: The particle transformer model
             train_dataloader: Training data loader
@@ -71,6 +75,8 @@ class ParticleTrainer:
             experiment_logger: Logger for experiment tracking (MLflow, Comet, etc.)
             gradient_accumulation_steps: Number of steps to accumulate gradients
             max_mask_attempts: Maximum attempts to create a non-empty mask before skipping batch
+            profile: Enable torch.profiler to trace the training loop
+            profile_dir: Directory to save profiler trace output (defaults to save_dir/profiler)
         """
         self.num_epochs = num_epochs
         self.rank = rank
@@ -124,7 +130,16 @@ class ParticleTrainer:
         self.step = 0
         self.epoch = 0
         self.best_val_loss = float('inf')
-        
+
+        # Profiling
+        self.profile = profile
+        if profile_dir is not None:
+            self.profile_dir = Path(profile_dir)
+        elif self.save_dir is not None:
+            self.profile_dir = self.save_dir / "profiler"
+        else:
+            self.profile_dir = Path("profiler_output")
+
         # Create save directory (only on main process)
         if self.save_dir and self.is_main:
             self.save_dir.mkdir(parents=True, exist_ok=True)
@@ -145,24 +160,24 @@ class ParticleTrainer:
     ) -> Optional[tuple]:
         """
         Create masks for prediction with retry logic for empty masks.
-        
+
         Args:
             pt, eta, phi, particle_id: Particle features on device
             padding_mask: Boolean mask where True = padding
-            
+
         Returns:
             Tuple of (masked_inputs, mask_targets) if successful, None if all attempts failed
         """
         raw_model = self._get_model_for_inference()
-        
+
         for _ in range(self.max_mask_attempts):
             masked_inputs, mask_targets = raw_model.create_masks(
                 pt, eta, phi, particle_id,
-                padding_mask=padding_mask
+                padding_mask=padding_mask,
             )
             if mask_targets['mask'].sum() > 0:
                 return masked_inputs, mask_targets
-        
+
         return None
     
     def train_step(self, batch: Dict[str, torch.Tensor]) -> Optional[Dict[str, float]]:
@@ -184,12 +199,12 @@ class ParticleTrainer:
         eta = batch['eta'].to(self.device)
         phi = batch['phi'].to(self.device)
         particle_id = batch['particle_id'].to(self.device)
-        
+
         # Get padding mask from batch
         # batch['mask'] is True for real particles, we need True for padding
         real_particle_mask = batch['mask'].to(self.device)
         padding_mask = ~real_particle_mask  # Invert: True = padding
-        
+
         # Create masks for prediction with retry logic for empty masks
         mask_result = self._create_masks_with_retry(
             pt, eta, phi, particle_id, padding_mask
@@ -248,16 +263,16 @@ class ParticleTrainer:
         self.model.eval()
         raw_model = self._get_model_for_inference()
         
-        total_losses = {
+        total_losses: Dict[str, float] = {
             'total_loss': 0.0,
             'pt_loss': 0.0,
             'eta_loss': 0.0,
             'phi_loss': 0.0,
-            'particle_id_loss': 0.0
+            'particle_id_loss': 0.0,
         }
         num_batches = 0
         skipped_batches = 0
-        
+
         with torch.no_grad():
             for batch in dataloader:
                 # Move batch to device
@@ -265,11 +280,11 @@ class ParticleTrainer:
                 eta = batch['eta'].to(self.device)
                 phi = batch['phi'].to(self.device)
                 particle_id = batch['particle_id'].to(self.device)
-                
+
                 # Get padding mask
                 real_particle_mask = batch['mask'].to(self.device)
                 padding_mask = ~real_particle_mask
-                
+
                 # Create masks with retry logic
                 mask_result = self._create_masks_with_retry(
                     pt, eta, phi, particle_id, padding_mask
@@ -362,17 +377,43 @@ class ParticleTrainer:
         if self.is_main:
             logger.info(f"Loaded checkpoint from {filepath}")
     
+    def _create_profiler(self) -> torch.profiler.profile:
+        """Create a torch.profiler.profile instance for tracing the training loop."""
+        self.profile_dir.mkdir(parents=True, exist_ok=True)
+        return torch.profiler.profile(
+            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+            record_shapes=True,
+            profile_memory=True,
+            with_stack=False,
+        )
+
+    def _report_profile(self, prof: torch.profiler.profile) -> None:
+        """Export profiler trace and print summary table."""
+        if not self.is_main:
+            return
+
+        trace_path = self.profile_dir / "trace.json"
+        prof.export_chrome_trace(str(trace_path))
+        logger.info(f"Profiler trace saved to {trace_path}")
+
+        logger.info(
+            "Profiler summary (sorted by CPU time):\n"
+            + prof.key_averages().table(sort_by="cpu_time_total", row_limit=30)
+        )
+
     def train(self) -> None:
         """Train the model for the number of epochs specified in the constructor."""
         num_epochs = self.num_epochs
-        
+
         if self.is_main:
             logger.info(f"Starting training for {num_epochs} epochs")
             if self.is_distributed:
                 logger.info(f"Distributed training with world_size={self.world_size}")
             logger.info(f"Device: {self.device}")
             logger.info(f"Model parameters: {sum(p.numel() for p in self.model.parameters()):,}")
-        
+            if self.profile:
+                logger.info(f"Profiling enabled — trace will be saved to {self.profile_dir}")
+
         # Do initial loss logging for both train and val (only on main process)
         if self.is_main:
             logger.info("Performing initial loss calculation over training dataset")
@@ -388,79 +429,90 @@ class ParticleTrainer:
             logger.info(f"Epoch 0 - Initial Validation Loss: {init_val_losses['total_loss']:.4f}")
             self.experiment_logger.log_metrics({f"val_{k}": v for k, v in init_val_losses.items()}, step=self.step)
 
-        for epoch in range(num_epochs):
-            self.epoch = epoch
-            batch_losses = []
-            
-            # Set epoch for distributed sampler (ensures different shuffling each epoch)
-            if hasattr(self.train_dataloader, 'sampler') and \
-               hasattr(self.train_dataloader.sampler, 'set_epoch'):
-                self.train_dataloader.sampler.set_epoch(epoch)
-            
-            # Training loop with progress bar (only on main process)
-            if self.is_main:
-                pbar = tqdm(self.train_dataloader, desc=f"Epoch {epoch+1}/{num_epochs}")
-            else:
-                pbar = self.train_dataloader
-            
-            self.optimizer.zero_grad()
-            
-            for batch_idx, batch in enumerate(pbar):
-                losses = self.train_step(batch)
-                
-                # Skip if batch was skipped (empty mask)
-                if losses is None:
-                    continue
-                
-                batch_losses.append(losses)
-                
-                # Gradient accumulation: step optimizer every N batches
-                if (batch_idx + 1) % self.gradient_accumulation_steps == 0:
-                    # Gradient clipping
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                    
-                    self.optimizer.step()
-                    self.scheduler.step()
-                    self.optimizer.zero_grad()
-                    self.step += 1
-                    
-                    # Log training stats (only on main process)
-                    if self.is_main and self.step % self.log_interval == 0 and len(batch_losses) > 0:
-                        recent_losses = batch_losses[-self.log_interval:]
-                        avg_loss = sum(l['total_loss'] for l in recent_losses) / len(recent_losses)
-                        lr = self.scheduler.get_last_lr()[0]
-                        pbar.set_postfix({'loss': f"{avg_loss:.4f}", 'lr': f"{lr:.2e}"})
-                        
-                        metrics_to_log = losses.copy()
-                        metrics_to_log['avg_loss'] = avg_loss
-                        metrics_to_log['lr'] = lr
-                        metrics_to_log = {f"train_{k}": v for k, v in metrics_to_log.items()}
-                        self.experiment_logger.log_metrics(metrics_to_log, step=self.step)
-            
-            # Synchronize before validation (if distributed)
-            if self.is_distributed:
-                sync_across_processes()
-            
-            # Validation
-            val_losses = self.validate()
-            if val_losses and self.is_main:
-                val_loss = val_losses['total_loss']
-                logger.info(f"Epoch {epoch+1} - Val Loss: {val_loss:.4f}")
-                self.experiment_logger.log_metrics({f"val_{k}": v for k, v in val_losses.items()}, step=self.step)
-                
-                # Save best model
-                if val_loss < self.best_val_loss:
-                    self.best_val_loss = val_loss
-                    self.save_checkpoint(f"best_model_epoch_{epoch+1}.pt")
-            
-            # Save periodic checkpoint
-            if (epoch + 1) % 5 == 0:
-                self.save_checkpoint(f"checkpoint_epoch_{epoch+1}.pt")
-            
-            # Synchronize before next epoch (if distributed)
-            if self.is_distributed:
-                sync_across_processes()
-        
+        prof_ctx = self._create_profiler() if self.profile else nullcontext()
+
+        with prof_ctx as prof:
+            for epoch in range(num_epochs):
+                self.epoch = epoch
+                batch_losses = []
+
+                # Set epoch for distributed sampler (ensures different shuffling each epoch)
+                if hasattr(self.train_dataloader, 'sampler') and \
+                   hasattr(self.train_dataloader.sampler, 'set_epoch'):
+                    self.train_dataloader.sampler.set_epoch(epoch)
+
+                # Training loop with progress bar (only on main process)
+                if self.is_main:
+                    pbar = tqdm(self.train_dataloader, desc=f"Epoch {epoch+1}/{num_epochs}")
+                else:
+                    pbar = self.train_dataloader
+
+                self.optimizer.zero_grad()
+
+                for batch_idx, batch in enumerate(pbar):
+                    losses = self.train_step(batch)
+
+                    # Skip if batch was skipped (empty mask)
+                    if losses is None:
+                        if prof is not None:
+                            prof.step()
+                        continue
+
+                    batch_losses.append(losses)
+
+                    # Gradient accumulation: step optimizer every N batches
+                    if (batch_idx + 1) % self.gradient_accumulation_steps == 0:
+                        # Gradient clipping
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+
+                        self.optimizer.step()
+                        self.scheduler.step()
+                        self.optimizer.zero_grad()
+                        self.step += 1
+
+                        # Log training stats (only on main process)
+                        if self.is_main and self.step % self.log_interval == 0 and len(batch_losses) > 0:
+                            recent_losses = batch_losses[-self.log_interval:]
+                            avg_loss = sum(l['total_loss'] for l in recent_losses) / len(recent_losses)
+                            lr = self.scheduler.get_last_lr()[0]
+                            pbar.set_postfix({'loss': f"{avg_loss:.4f}", 'lr': f"{lr:.2e}"})
+
+                            metrics_to_log = losses.copy()
+                            metrics_to_log['avg_loss'] = avg_loss
+                            metrics_to_log['lr'] = lr
+                            metrics_to_log = {f"train_{k}": v for k, v in metrics_to_log.items()}
+                            self.experiment_logger.log_metrics(metrics_to_log, step=self.step)
+
+                    if prof is not None:
+                        prof.step()
+
+                # Synchronize before validation (if distributed)
+                if self.is_distributed:
+                    sync_across_processes()
+
+                # Validation
+                val_losses = self.validate()
+                if val_losses and self.is_main:
+                    val_loss = val_losses['total_loss']
+                    logger.info(f"Epoch {epoch+1} - Val Loss: {val_loss:.4f}")
+                    self.experiment_logger.log_metrics({f"val_{k}": v for k, v in val_losses.items()}, step=self.step)
+
+                    # Save best model
+                    if val_loss < self.best_val_loss:
+                        self.best_val_loss = val_loss
+                        self.save_checkpoint(f"best_model_epoch_{epoch+1}.pt")
+
+                # Save periodic checkpoint
+                if (epoch + 1) % 5 == 0:
+                    self.save_checkpoint(f"checkpoint_epoch_{epoch+1}.pt")
+
+                # Synchronize before next epoch (if distributed)
+                if self.is_distributed:
+                    sync_across_processes()
+
+        if self.profile:
+            self._report_profile(prof)
+
         if self.is_main:
             logger.info("Training completed!")
         self.save_checkpoint("final_model.pt")

@@ -16,3 +16,5 @@ mask_prob: 0.15
 num_workers: 0
 # Gradient accumulation steps (for effective larger batch sizes)
 gradient_accumulation_steps: 1
+# Enable torch.profiler to trace the training loop
+profile: false

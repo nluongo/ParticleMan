@@ -305,6 +305,8 @@ def main(cfg: TrainConfig) -> None:
     
     save_dir = output.checkpoint_dir if output else None
     
+    profile_dir = output.run_dir / "profiler" if output else None
+
     trainer = ParticleTrainer(
         model=model,
         train_dataloader=train_loader,
@@ -319,6 +321,8 @@ def main(cfg: TrainConfig) -> None:
         save_dir=save_dir,
         experiment_logger=train_experiment_logger,
         gradient_accumulation_steps=cfg.training.gradient_accumulation_steps,
+        profile=cfg.training.profile,
+        profile_dir=profile_dir,
     )
     
     if is_main_process(rank):
