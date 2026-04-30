@@ -117,6 +117,7 @@ class TrainingConfig:
     mask_prob: float = 0.15
     num_workers: int = 0
     gradient_accumulation_steps: int = 1
+    profile: bool = False
 
 
 # =============================================================================
