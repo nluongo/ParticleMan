@@ -1,5 +1,8 @@
 """Test the Particle Transformer model."""
 
+import tempfile
+from pathlib import Path
+
 import torch
 import pytest
 
@@ -11,6 +14,7 @@ from particleman.models.particle_transformer import (
     ConcatEmbedding,
     JointEmbedding,
 )
+from particleman.training.trainer import ParticleTrainer
 
 
 class TestParticleConfig:
@@ -486,25 +490,152 @@ class TestEmbeddingModules:
     
     def test_joint_embedding_learns_interactions(self, config: ParticleConfig) -> None:
         """Test that JointEmbedding can learn feature interactions.
-        
+
         The joint embedding should produce different outputs for different
         combinations of features, even if individual features are the same.
         """
         embed = JointEmbedding(config)
-        
+
         # Two particles with same pt but different eta
         pt1 = torch.tensor([[0.5]])
         eta1 = torch.tensor([[0.0]])
         phi1 = torch.tensor([[0.0]])
         pid1 = torch.tensor([[0]])
-        
+
         pt2 = torch.tensor([[0.5]])  # Same pt
         eta2 = torch.tensor([[1.0]])  # Different eta
         phi2 = torch.tensor([[0.0]])
         pid2 = torch.tensor([[0]])
-        
+
         out1 = embed(pt1, eta1, phi1, pid1)
         out2 = embed(pt2, eta2, phi2, pid2)
-        
+
         # Outputs should be different
         assert not torch.allclose(out1, out2)
+
+
+# ---------------------------------------------------------------------------
+# Trainer tests
+# ---------------------------------------------------------------------------
+
+def _make_dataloader(batch_size: int = 2, seq_len: int = 10, n_event_types: int = 3):
+    """Build a minimal DataLoader with event labels."""
+    from torch.utils.data import DataLoader, TensorDataset
+
+    B, S = 4, seq_len
+    ds = TensorDataset(
+        torch.rand(B, S),
+        torch.rand(B, S),
+        torch.rand(B, S),
+        torch.randint(0, 14, (B, S)),
+        torch.ones(B, S, dtype=torch.bool),
+        torch.randint(0, n_event_types, (B,)),
+    )
+
+    def collate(items):
+        pt, eta, phi, pid, mask, lbl = zip(*items)
+        return {
+            'pt': torch.stack(pt),
+            'eta': torch.stack(eta),
+            'phi': torch.stack(phi),
+            'particle_id': torch.stack(pid),
+            'mask': torch.stack(mask),
+            'event_label': torch.stack(lbl),
+        }
+
+    return DataLoader(ds, batch_size=batch_size, collate_fn=collate)
+
+
+class TestParticleTrainer:
+    """Test ParticleTrainer checkpoint and fine-tuning functionality."""
+
+    @pytest.fixture
+    def small_config(self) -> ParticleConfig:
+        return ParticleConfig(d_model=32, n_heads=2, n_layers=1, d_ff=64, n_event_types=3)
+
+    @pytest.fixture
+    def pretrained_checkpoint(self, small_config: ParticleConfig, tmp_path: Path) -> Path:
+        """Save a minimal checkpoint and return its path."""
+        model = ParticleTransformer(small_config)
+        ckpt_path = tmp_path / "pretrained.pt"
+        torch.save(
+            {
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': {},
+                'scheduler_state_dict': {},
+                'step': 999,
+                'epoch': 42,
+                'config': small_config,
+                'world_size': 1,
+            },
+            ckpt_path,
+        )
+        return ckpt_path
+
+    def test_load_pretrained_weights_restores_model(
+        self, small_config: ParticleConfig, pretrained_checkpoint: Path
+    ) -> None:
+        """Weights loaded from checkpoint match the saved model's state dict."""
+        saved_state = torch.load(pretrained_checkpoint, map_location='cpu', weights_only=False)['model_state_dict']
+
+        dl = _make_dataloader()
+        fresh_model = ParticleTransformer(small_config)
+        trainer = ParticleTrainer(fresh_model, dl, device='cpu', num_epochs=1)
+        trainer.load_pretrained_weights(pretrained_checkpoint)
+
+        loaded_state = trainer._get_model_for_inference().state_dict()
+        for key in saved_state:
+            assert torch.equal(saved_state[key], loaded_state[key]), f"Mismatch for {key}"
+
+    def test_pretrained_checkpoint_constructor_loads_weights(
+        self, small_config: ParticleConfig, pretrained_checkpoint: Path
+    ) -> None:
+        """Passing pretrained_checkpoint to the constructor loads weights."""
+        saved_state = torch.load(pretrained_checkpoint, map_location='cpu', weights_only=False)['model_state_dict']
+
+        dl = _make_dataloader()
+        fresh_model = ParticleTransformer(small_config)
+        trainer = ParticleTrainer(
+            fresh_model, dl, device='cpu', num_epochs=1,
+            pretrained_checkpoint=pretrained_checkpoint,
+        )
+
+        loaded_state = trainer._get_model_for_inference().state_dict()
+        for key in saved_state:
+            assert torch.equal(saved_state[key], loaded_state[key]), f"Mismatch for {key}"
+
+    def test_pretrained_checkpoint_leaves_optimizer_fresh(
+        self, small_config: ParticleConfig, pretrained_checkpoint: Path
+    ) -> None:
+        """step and epoch stay at 0 after loading pretrained weights."""
+        dl = _make_dataloader()
+        fresh_model = ParticleTransformer(small_config)
+        trainer = ParticleTrainer(
+            fresh_model, dl, device='cpu', num_epochs=1,
+            pretrained_checkpoint=pretrained_checkpoint,
+        )
+        assert trainer.step == 0
+        assert trainer.epoch == 0
+
+    def test_classify_mode_with_pretrained_checkpoint(
+        self, small_config: ParticleConfig, pretrained_checkpoint: Path
+    ) -> None:
+        """Classify mode from a pretrained checkpoint produces a non-zero event label loss."""
+        dl = _make_dataloader()
+        fresh_model = ParticleTransformer(small_config)
+        trainer = ParticleTrainer(
+            fresh_model, dl, device='cpu', num_epochs=1,
+            mode='classify',
+            pretrained_checkpoint=pretrained_checkpoint,
+        )
+        batch = next(iter(dl))
+        losses = trainer.train_step(batch)
+        assert losses is not None
+        assert losses['event_label_loss'] > 0.0
+        assert losses['pt_loss'] == 0.0      # no particle masking in classify mode
+
+    def test_invalid_mode_raises(self, small_config: ParticleConfig) -> None:
+        """An unknown mode raises ValueError."""
+        dl = _make_dataloader()
+        with pytest.raises(ValueError, match="mode must be"):
+            ParticleTrainer(ParticleTransformer(small_config), dl, device='cpu', mode='bad')

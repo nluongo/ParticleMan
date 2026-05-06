@@ -5,6 +5,7 @@ This module defines the interface that all particle data loaders must implement,
 along with common preprocessing logic.
 """
 
+import fnmatch
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Iterator, List, Mapping, Tuple, Union
 
@@ -64,6 +65,7 @@ class BaseParticleLoader(ABC):
         self.enabled_collections = get_enabled_collections(config)
         self._rng = np.random.default_rng(seed=config.get("split", {}).get("seed", 42))
         self._open_files()
+        self._build_event_label_index()
 
     @abstractmethod
     def _open_files(self) -> None:
@@ -78,6 +80,15 @@ class BaseParticleLoader(ABC):
     @abstractmethod
     def __len__(self) -> int:
         """Return the total number of events across all files."""
+        pass
+
+    @abstractmethod
+    def _get_file_idx(self, idx: int) -> int:
+        """
+        Return the file index (into self._file_paths) for global event index idx.
+
+        Subclasses implement this using their internal offset table.
+        """
         pass
 
     @abstractmethod
@@ -101,6 +112,29 @@ class BaseParticleLoader(ABC):
             The particle_id should already be mapped to categorical IDs.
         """
         pass
+
+    def _build_event_label_index(self) -> None:
+        """
+        Build a per-file event label lookup from the file_event_label_map config.
+
+        Patterns in file_event_label_map are matched (via fnmatch) against each
+        file's basename. The first matching pattern wins. Files that match no
+        pattern receive label -1 (excluded from the event-label loss during
+        training).
+
+        Populates self._event_labels (List[int]), one entry per file path.
+        """
+        file_event_label_map = self.config.get("file_event_label_map", {})
+        file_paths = getattr(self, "_file_paths", [])
+
+        self._event_labels: List[int] = []
+        for path in file_paths:
+            label = -1
+            for pattern, lbl in file_event_label_map.items():
+                if fnmatch.fnmatch(path.name, pattern):
+                    label = int(lbl)
+                    break
+            self._event_labels.append(label)
 
     def get_event(self, idx: int) -> Dict[str, np.ndarray]:
         """
@@ -155,6 +189,10 @@ class BaseParticleLoader(ABC):
         # Pad or truncate to max_particles
         pt, eta, phi, particle_id, mask = self._pad_or_truncate(pt, eta, phi, particle_id)
 
+        # Resolve file-origin label for this event
+        file_idx = self._get_file_idx(idx)
+        event_label = self._event_labels[file_idx] if self._event_labels else -1
+
         return {
             "pt": pt,
             "eta": eta,
@@ -162,6 +200,7 @@ class BaseParticleLoader(ABC):
             "particle_id": particle_id,
             "mask": mask,
             "n_particles": n_particles,
+            "event_label": event_label,
         }
 
     def _preprocess(

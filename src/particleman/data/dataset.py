@@ -113,6 +113,7 @@ class ParticleDataset(Dataset):
             "particle_id": torch.tensor(event["particle_id"], dtype=torch.long),
             "mask": torch.tensor(event["mask"], dtype=torch.bool),
             "n_particles": torch.tensor(event["n_particles"], dtype=torch.long),
+            "event_label": torch.tensor(event["event_label"], dtype=torch.long),
         }
 
     @property

@@ -220,7 +220,8 @@ def main(cfg: TrainConfig) -> None:
     preproc = cfg.data.get("preprocessing", {})
     max_particles = preproc.get("max_particles", 200)
     eta_cut = preproc.get("eta_cut", 5.0)
-    
+    n_event_types = cfg.data.get("n_event_types", 0)
+
     model_config = ParticleConfig(
         d_model=cfg.model.d_model,
         n_heads=cfg.model.n_heads,
@@ -238,6 +239,8 @@ def main(cfg: TrainConfig) -> None:
         phi_range=(-3.14159, 3.14159),
         angular_attention_bias=cfg.model.angular_attention_bias,
         bias_hidden_dim=cfg.model.bias_hidden_dim,
+        n_event_types=n_event_types,
+        event_label_mask_prob=cfg.training.event_label_mask_prob,
     )
     model_config_dict = asdict(model_config)
     
@@ -323,6 +326,8 @@ def main(cfg: TrainConfig) -> None:
         gradient_accumulation_steps=cfg.training.gradient_accumulation_steps,
         profile=cfg.training.profile,
         profile_dir=profile_dir,
+        pretrained_checkpoint=Path(cfg.training.pretrained_checkpoint) if cfg.training.pretrained_checkpoint else None,
+        mode=cfg.training.mode,
     )
     
     if is_main_process(rank):

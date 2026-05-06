@@ -160,6 +160,11 @@ class HDF5ParticleLoader(BaseParticleLoader):
         """Return total number of events."""
         return self._total_events
 
+    def _get_file_idx(self, idx: int) -> int:
+        """Return the file index for global event index idx."""
+        file_idx, _ = self._get_file_and_local_idx(idx)
+        return file_idx
+
     def _get_file_and_local_idx(self, global_idx: int) -> Tuple[int, int]:
         """
         Convert global event index to (file_index, local_index).

@@ -46,6 +46,9 @@ class ParticleConfig:
     embed_hidden_dim: int = 128  # Hidden dimension for embedding MLP (used in JOINT mode)
     angular_attention_bias: bool = False  # Use AttentionBiasTransformer with pairwise angular bias
     bias_hidden_dim: int = 32  # Hidden dim for angular attention bias MLP
+    # Event label prediction (0 = disabled)
+    n_event_types: int = 0
+    event_label_mask_prob: float = 0.15
 
 
 class ConcatEmbedding(nn.Module):
@@ -359,6 +362,14 @@ class ParticleTransformer(nn.Module):
         self.eta_head = nn.Linear(config.d_model, 1)
         self.phi_head = nn.Linear(config.d_model, 1)
         self.particle_id_head = nn.Linear(config.d_model, config.n_particle_types)
+
+        # Event-level label head (optional)
+        if config.n_event_types > 0:
+            self.event_label_head: Optional[nn.Linear] = nn.Linear(
+                config.d_model, config.n_event_types
+            )
+        else:
+            self.event_label_head = None
     
     def _normalize_features(
         self, pt: Tensor, eta: Tensor, phi: Tensor
@@ -432,22 +443,40 @@ class ParticleTransformer(nn.Module):
         hidden_states = self.transformer(embeddings, src_key_padding_mask=padding_mask)
         
         # Generate predictions
-        return {
+        predictions: Dict[str, Tensor] = {
             'pt': self.pt_head(hidden_states).squeeze(-1),
             'eta': self.eta_head(hidden_states).squeeze(-1),
             'phi': self.phi_head(hidden_states).squeeze(-1),
             'particle_id': self.particle_id_head(hidden_states),
-            'hidden_states': hidden_states
+            'hidden_states': hidden_states,
         }
+
+        # Event-level label prediction via mean-pooling over real particles
+        if self.event_label_head is not None:
+            # real_mask: True for real particles (invert padding_mask)
+            if padding_mask is not None:
+                real_mask = ~padding_mask  # (batch, seq), True = real
+            else:
+                real_mask = torch.ones(
+                    hidden_states.shape[:2], dtype=torch.bool, device=hidden_states.device
+                )
+            # Mean-pool: sum over real positions, divide by count
+            real_mask_f = real_mask.unsqueeze(-1).float()  # (batch, seq, 1)
+            event_emb = (hidden_states * real_mask_f).sum(dim=1) / real_mask_f.sum(dim=1).clamp(min=1)
+            predictions['event_label'] = self.event_label_head(event_emb)  # (batch, n_event_types)
+
+        return predictions
     
     def create_masks(
-        self, 
-        pt: Tensor, 
-        eta: Tensor, 
-        phi: Tensor, 
+        self,
+        pt: Tensor,
+        eta: Tensor,
+        phi: Tensor,
         particle_id: Tensor,
         padding_mask: Optional[Tensor] = None,
         mask_prob: Optional[float] = None,
+        event_label: Optional[Tensor] = None,
+        event_label_mask_prob: Optional[float] = None,
     ) -> Tuple[Dict[str, Tensor], Dict[str, Tensor]]:
         """
         Create random masks for pre-training.
@@ -509,17 +538,27 @@ class ParticleTransformer(nn.Module):
             'pt': masked_pt,
             'eta': masked_eta,
             'phi': masked_phi,
-            'particle_id': masked_particle_id
+            'particle_id': masked_particle_id,
         }
-        
-        mask_targets = {
+
+        mask_targets: Dict[str, Tensor] = {
             'pt': pt,
             'eta': eta,
             'phi': phi,
             'particle_id': particle_id,
-            'mask': prediction_mask  # Only True for real particles that are masked
+            'mask': prediction_mask,  # Only True for real particles that are masked
         }
-        
+
+        # Event label masking (event-level)
+        if event_label is not None and self.event_label_head is not None:
+            if event_label_mask_prob is None:
+                event_label_mask_prob = self.config.event_label_mask_prob
+            # Randomly select events to mask; exclude events with unknown label (-1)
+            random_event_mask = torch.rand(batch_size, device=device) < event_label_mask_prob
+            event_label_prediction_mask = random_event_mask & (event_label != -1)
+            mask_targets['event_label'] = event_label
+            mask_targets['event_label_mask'] = event_label_prediction_mask
+
         return masked_inputs, mask_targets
     
     def compute_loss(
@@ -564,14 +603,29 @@ class ParticleTransformer(nn.Module):
             particle_id_loss = torch.tensor(0.0, device=device)
         
         total_loss = pt_loss + eta_loss + phi_loss + particle_id_loss
-        
-        return {
+
+        losses = {
             'total_loss': total_loss,
             'pt_loss': pt_loss,
             'eta_loss': eta_loss,
             'phi_loss': phi_loss,
-            'particle_id_loss': particle_id_loss
+            'particle_id_loss': particle_id_loss,
         }
+
+        # Event label loss (event-level cross-entropy on masked events)
+        if 'event_label' in predictions and 'event_label' in targets and 'event_label_mask' in targets:
+            event_label_mask = targets['event_label_mask']  # (batch,)
+            if event_label_mask.sum() > 0:
+                event_label_loss = F.cross_entropy(
+                    predictions['event_label'][event_label_mask],
+                    targets['event_label'][event_label_mask],
+                )
+            else:
+                event_label_loss = torch.tensor(0.0, device=device)
+            losses['event_label_loss'] = event_label_loss
+            losses['total_loss'] = total_loss + event_label_loss
+
+        return losses
 
 
 class AttentionBiasTransformer(ParticleTransformer):

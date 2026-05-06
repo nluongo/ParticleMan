@@ -70,6 +70,7 @@ class ROOTParticleLoader(BaseParticleLoader):
         self._trees: List[uproot.TTree] = []
         self._event_offsets: List[int] = [0]
         self._total_events = 0
+        self._file_paths: List[Path] = []
 
         source = self.config.get("source", {})
         tree_name = source.get("tree_name", "CollectionTree")
@@ -132,6 +133,7 @@ class ROOTParticleLoader(BaseParticleLoader):
             n_events = tree.num_entries
             self._files.append(f)
             self._trees.append(tree)
+            self._file_paths.append(filepath)
             self._event_offsets.append(self._event_offsets[-1] + n_events)
             self._total_events += n_events
 
@@ -144,6 +146,11 @@ class ROOTParticleLoader(BaseParticleLoader):
     def __len__(self) -> int:
         """Return total number of events."""
         return self._total_events
+
+    def _get_file_idx(self, idx: int) -> int:
+        """Return the file index for global event index idx."""
+        file_idx, _ = self._get_file_and_local_idx(idx)
+        return file_idx
 
     def _get_file_and_local_idx(self, global_idx: int) -> Tuple[int, int]:
         """

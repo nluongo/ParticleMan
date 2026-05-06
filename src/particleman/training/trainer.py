@@ -56,6 +56,8 @@ class ParticleTrainer:
         max_mask_attempts: int = 5,
         profile: bool = False,
         profile_dir: Optional[Path] = None,
+        mode: str = 'pretrain',
+        pretrained_checkpoint: Optional[Path] = None,
     ) -> None:
         """
         Initialize the trainer.
@@ -77,7 +79,16 @@ class ParticleTrainer:
             max_mask_attempts: Maximum attempts to create a non-empty mask before skipping batch
             profile: Enable torch.profiler to trace the training loop
             profile_dir: Directory to save profiler trace output (defaults to save_dir/profiler)
+            mode: Training mode — 'pretrain' for masked particle prediction, 'classify'
+                  for supervised event label classification (no particle masking).
+            pretrained_checkpoint: Path to a checkpoint file from which to load model
+                weights only. Optimizer and scheduler are left freshly initialized,
+                making this suitable for both fine-tuning and continued pre-training
+                with a new schedule.
         """
+        if mode not in ('pretrain', 'classify'):
+            raise ValueError(f"mode must be 'pretrain' or 'classify', got {mode!r}")
+        self.mode = mode
         self.num_epochs = num_epochs
         self.rank = rank
         self.world_size = world_size
@@ -143,6 +154,10 @@ class ParticleTrainer:
         # Create save directory (only on main process)
         if self.save_dir and self.is_main:
             self.save_dir.mkdir(parents=True, exist_ok=True)
+
+        # Load pretrained weights if provided (weights only; optimizer/scheduler stay fresh)
+        if pretrained_checkpoint is not None:
+            self.load_pretrained_weights(pretrained_checkpoint)
     
     def _get_model_for_inference(self) -> ParticleTransformer:
         """Get the underlying model (unwrapped from DDP if necessary)."""
@@ -157,6 +172,7 @@ class ParticleTrainer:
         phi: torch.Tensor,
         particle_id: torch.Tensor,
         padding_mask: torch.Tensor,
+        event_label: Optional[torch.Tensor] = None,
     ) -> Optional[tuple]:
         """
         Create masks for prediction with retry logic for empty masks.
@@ -164,6 +180,8 @@ class ParticleTrainer:
         Args:
             pt, eta, phi, particle_id: Particle features on device
             padding_mask: Boolean mask where True = padding
+            event_label: Optional event class labels; forwarded to create_masks so
+                the event label classification loss is included when n_event_types > 0.
 
         Returns:
             Tuple of (masked_inputs, mask_targets) if successful, None if all attempts failed
@@ -174,24 +192,82 @@ class ParticleTrainer:
             masked_inputs, mask_targets = raw_model.create_masks(
                 pt, eta, phi, particle_id,
                 padding_mask=padding_mask,
+                event_label=event_label,
             )
             if mask_targets['mask'].sum() > 0:
                 return masked_inputs, mask_targets
 
         return None
     
+    def _classify_step(self, batch: Dict[str, torch.Tensor]) -> Optional[Dict[str, float]]:
+        """
+        Perform a single classification step: supervised event label classification.
+
+        No particle masking is applied. Loss is computed on all events that have a
+        valid label (event_label != -1). Requires the model to have n_event_types > 0.
+        Works with both randomly initialized and pretrained model weights.
+        """
+        self.model.train()
+
+        pt = batch['pt'].to(self.device)
+        eta = batch['eta'].to(self.device)
+        phi = batch['phi'].to(self.device)
+        particle_id = batch['particle_id'].to(self.device)
+        real_particle_mask = batch['mask'].to(self.device)
+        padding_mask = ~real_particle_mask
+        event_label = batch['event_label'].to(self.device)
+
+        labeled_mask = event_label != -1
+        if labeled_mask.sum() == 0:
+            logger.warning("Skipping batch: no labeled events")
+            return None
+
+        predictions = self.model(pt, eta, phi, particle_id, padding_mask=padding_mask)
+
+        targets = {
+            'pt': pt,
+            'eta': eta,
+            'phi': phi,
+            'particle_id': particle_id,
+            'mask': torch.zeros_like(real_particle_mask),  # no particle masking
+            'event_label': event_label,
+            'event_label_mask': labeled_mask,
+        }
+
+        raw_model = self._get_model_for_inference()
+        losses = raw_model.compute_loss(predictions, targets)
+
+        loss = losses['total_loss'] / self.gradient_accumulation_steps
+
+        if loss.item() == 0.0:
+            logger.warning("Skipping backward pass: loss is zero")
+            return {k: v.item() for k, v in losses.items()}
+
+        loss.backward()
+        return {k: v.item() for k, v in losses.items()}
+
     def train_step(self, batch: Dict[str, torch.Tensor]) -> Optional[Dict[str, float]]:
         """
         Perform a single training step.
-        
+
+        In 'pretrain' mode: applies random particle masking and trains on masked
+        particle reconstruction (pt, eta, phi, particle_id).
+
+        In 'classify' mode: delegates to _classify_step for supervised event label
+        classification with no particle masking.
+
         Args:
             batch: Batch of particle data with keys:
                 - pt, eta, phi, particle_id: Particle features
                 - mask: Boolean mask where True = real particle, False = padding
-            
+                - event_label: Integer event class label (-1 if unknown)
+
         Returns:
-            Dictionary of loss values, or None if batch was skipped (empty mask)
+            Dictionary of loss values, or None if batch was skipped
         """
+        if self.mode == 'classify':
+            return self._classify_step(batch)
+
         self.model.train()
         
         # Move batch to device
@@ -205,9 +281,11 @@ class ParticleTrainer:
         real_particle_mask = batch['mask'].to(self.device)
         padding_mask = ~real_particle_mask  # Invert: True = padding
 
+        event_label = batch['event_label'].to(self.device) if 'event_label' in batch else None
+
         # Create masks for prediction with retry logic for empty masks
         mask_result = self._create_masks_with_retry(
-            pt, eta, phi, particle_id, padding_mask
+            pt, eta, phi, particle_id, padding_mask, event_label=event_label
         )
         
         # Skip batch if no valid mask could be created
@@ -262,63 +340,64 @@ class ParticleTrainer:
         
         self.model.eval()
         raw_model = self._get_model_for_inference()
-        
-        total_losses: Dict[str, float] = {
-            'total_loss': 0.0,
-            'pt_loss': 0.0,
-            'eta_loss': 0.0,
-            'phi_loss': 0.0,
-            'particle_id_loss': 0.0,
-        }
+
+        total_losses: Dict[str, float] = {}
         num_batches = 0
         skipped_batches = 0
 
         with torch.no_grad():
             for batch in dataloader:
-                # Move batch to device
                 pt = batch['pt'].to(self.device)
                 eta = batch['eta'].to(self.device)
                 phi = batch['phi'].to(self.device)
                 particle_id = batch['particle_id'].to(self.device)
-
-                # Get padding mask
                 real_particle_mask = batch['mask'].to(self.device)
                 padding_mask = ~real_particle_mask
 
-                # Create masks with retry logic
-                mask_result = self._create_masks_with_retry(
-                    pt, eta, phi, particle_id, padding_mask
-                )
-                
-                # Skip batch if no valid mask could be created
-                if mask_result is None:
-                    skipped_batches += 1
-                    continue
-                
-                masked_inputs, mask_targets = mask_result
-                
-                # Forward pass
-                predictions = self.model(
-                    masked_inputs['pt'],
-                    masked_inputs['eta'],
-                    masked_inputs['phi'],
-                    masked_inputs['particle_id'],
-                    padding_mask=padding_mask,
-                )
-                
-                # Compute loss
-                losses = raw_model.compute_loss(predictions, mask_targets)
-                
-                # Accumulate losses
+                if self.mode == 'classify':
+                    event_label = batch['event_label'].to(self.device)
+                    labeled_mask = event_label != -1
+                    if labeled_mask.sum() == 0:
+                        skipped_batches += 1
+                        continue
+
+                    predictions = self.model(pt, eta, phi, particle_id, padding_mask=padding_mask)
+                    targets = {
+                        'pt': pt,
+                        'eta': eta,
+                        'phi': phi,
+                        'particle_id': particle_id,
+                        'mask': torch.zeros_like(real_particle_mask),
+                        'event_label': event_label,
+                        'event_label_mask': labeled_mask,
+                    }
+                    losses = raw_model.compute_loss(predictions, targets)
+                else:
+                    event_label = batch['event_label'].to(self.device) if 'event_label' in batch else None
+                    mask_result = self._create_masks_with_retry(
+                        pt, eta, phi, particle_id, padding_mask, event_label=event_label
+                    )
+                    if mask_result is None:
+                        skipped_batches += 1
+                        continue
+
+                    masked_inputs, mask_targets = mask_result
+                    predictions = self.model(
+                        masked_inputs['pt'],
+                        masked_inputs['eta'],
+                        masked_inputs['phi'],
+                        masked_inputs['particle_id'],
+                        padding_mask=padding_mask,
+                    )
+                    losses = raw_model.compute_loss(predictions, mask_targets)
+
                 for k, v in losses.items():
-                    total_losses[k] += v.item()
-                
+                    total_losses[k] = total_losses.get(k, 0.0) + v.item()
+
                 num_batches += 1
         
         if skipped_batches > 0:
-            logger.warning(
-                f"Skipped {skipped_batches} batches during evaluation due to empty masks"
-            )
+            logger.warning(f"Skipped {skipped_batches} batches during evaluation")
         
         # Average losses locally
         if num_batches > 0:
@@ -365,7 +444,7 @@ class ParticleTrainer:
     
     def load_checkpoint(self, filepath: Path) -> None:
         """Load model checkpoint."""
-        checkpoint = torch.load(filepath, map_location=self.device)
+        checkpoint = torch.load(filepath, map_location=self.device, weights_only=False)
         
         raw_model = self._get_model_for_inference()
         raw_model.load_state_dict(checkpoint['model_state_dict'])
@@ -377,6 +456,22 @@ class ParticleTrainer:
         if self.is_main:
             logger.info(f"Loaded checkpoint from {filepath}")
     
+    def load_pretrained_weights(self, filepath: Path) -> None:
+        """Load model weights from a checkpoint, leaving optimizer and scheduler fresh.
+
+        Use this to initialise from a pre-training checkpoint before fine-tuning,
+        or to warm-start a new pre-training run with a different schedule.
+        """
+        checkpoint = torch.load(filepath, map_location=self.device, weights_only=False)
+        raw_model = self._get_model_for_inference()
+        result = raw_model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+        if self.is_main:
+            logger.info(f"Loaded pretrained weights from {filepath}")
+            if result.missing_keys:
+                logger.info(f"  Randomly initialised (not in checkpoint): {result.missing_keys}")
+            if result.unexpected_keys:
+                logger.warning(f"  Ignored (not in model): {result.unexpected_keys}")
+
     def _create_profiler(self) -> torch.profiler.profile:
         """Create a torch.profiler.profile instance for tracing the training loop."""
         self.profile_dir.mkdir(parents=True, exist_ok=True)

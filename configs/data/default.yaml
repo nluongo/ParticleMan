@@ -4,6 +4,9 @@
 # This file serves as a template for configuring particle data loading.
 # Copy this file and modify for your specific dataset.
 
+# Maximum events to load (null for all events)
+max_events: 10000
+
 # Data source configuration
 source:
   type: "hdf5"  # "root" or "hdf5"
@@ -70,6 +73,17 @@ particle_id_map:
 
 # Default ID for particles not in the map
 default_particle_id: 15
+
+# File-origin label map (glob pattern → integer label).
+# Patterns are matched against the file basename; first match wins.
+# Events from files that match no pattern receive label -1 (excluded from loss).
+# Set to an empty dict {} to disable this feature.
+file_event_label_map: {}
+
+# Total number of distinct event label classes.
+# Must be set to match the labels used in file_event_label_map when the feature is enabled.
+# This is the single source of truth; the model classification head is sized from this value.
+n_event_types: 0
 
 # Preprocessing applied after combining all collections
 preprocessing:

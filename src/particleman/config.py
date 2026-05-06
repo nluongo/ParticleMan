@@ -67,7 +67,7 @@ class SplitConfig:
 @dataclass
 class DataSourceConfig:
     """Complete data source configuration.
-    
+
     This mirrors the structure in configs/data/*.yaml and is loaded
     via Hydra's config composition.
     """
@@ -76,6 +76,9 @@ class DataSourceConfig:
     collections: Dict[str, Any] = field(default_factory=dict)
     particle_id_map: Dict[int, int] = field(default_factory=dict)
     default_particle_id: int = 15
+    # Process label mapping: glob pattern -> integer label
+    file_process_map: Dict[str, int] = field(default_factory=dict)
+    n_process_types: int = 0
     preprocessing: PreprocessingConfig = field(default_factory=PreprocessingConfig)
     split: SplitConfig = field(default_factory=SplitConfig)
     # Training-specific override for max events (None = use all)
@@ -115,9 +118,12 @@ class TrainingConfig:
     lr: float = 1e-4
     weight_decay: float = 0.01
     mask_prob: float = 0.15
+    event_label_mask_prob: float = 0.15
     num_workers: int = 0
     gradient_accumulation_steps: int = 1
     profile: bool = False
+    pretrained_checkpoint: Optional[str] = None
+    mode: str = 'pretrain'  # 'pretrain' or 'classify'
 
 
 # =============================================================================
