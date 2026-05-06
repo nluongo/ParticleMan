@@ -1,0 +1,153 @@
+# @package data
+#
+# Configuration for bbll preselection data AnalysisMiniTree ROOT files
+#
+# This configuration is for:
+#   mc20_13TeV.410472.PhPy8EG_A14_ttbar_hdamp258p75_dil.deriv.DAOD_PHYSLITE.*.root
+#
+# The file contains a flat ntuple (AnalysisMiniTree) with:
+#   - Reconstructed jets, electrons, muons (as vectors)
+#   - Truth jets (as vectors)
+#   - Pre-selected analysis objects (as scalars, e.g., bbll_Lepton1_*)
+
+# Maximum events to load (null for all events)
+max_events: 10000
+
+source:
+  type: "root"
+  files:
+    - "/lcrc/group/ATLAS/users/nluongo/ParticleMan/samples/finetune/*.root"
+  tree_name: "AnalysisMiniTree"
+
+# Particle collections to load
+# All enabled collections are combined into a single particle list per event
+collections:
+  # Reconstructed PFlow jets (variable number per event)
+  reco_jets:
+    enabled: true
+    columns:
+      pt: "recojet_antikt4PFlow_pt_NOSYS"
+      eta: "recojet_antikt4PFlow_eta"
+      phi: "recojet_antikt4PFlow_phi"
+      particle_id: "recojet_antikt4PFlow_PartonTruthLabelID"  # Jet flavor label
+    is_vector: true
+
+  # Reconstructed electrons (variable number per event)
+  electrons:
+    enabled: true
+    columns:
+      pt: "el_pt_NOSYS"
+      eta: "el_eta"
+      phi: "el_phi"
+    fixed_particle_id: 0  # electron category
+    is_vector: true
+
+  # Reconstructed muons (variable number per event)
+  muons:
+    enabled: true
+    columns:
+      pt: "mu_pt_NOSYS"
+      eta: "mu_eta"
+      phi: "mu_phi"
+    fixed_particle_id: 1  # muon category
+    is_vector: true
+
+  # Truth jets (for comparison/validation)
+  truth_jets:
+    enabled: false  # Disable by default, enable for truth studies
+    columns:
+      pt: "truthjet_antikt4_pt"
+      eta: "truthjet_antikt4_eta"
+      phi: "truthjet_antikt4_phi"
+      particle_id: "truthjet_antikt4_PartonTruthLabelID"
+    is_vector: true
+
+  # Pre-selected leading lepton (scalar - one per event)
+  lepton1:
+    enabled: false  # Disable by default (use el/mu vectors instead)
+    columns:
+      pt: "bbll_Lepton1_pt_NOSYS"
+      eta: "bbll_Lepton1_eta_NOSYS"
+      phi: "bbll_Lepton1_phi_NOSYS"
+      particle_id: "bbll_Lepton1_pdgid_NOSYS"  # PDG ID: ±11 or ±13
+    is_vector: false  # Scalar branch (one value per event)
+
+  # Pre-selected subleading lepton (scalar - one per event)
+  lepton2:
+    enabled: false
+    columns:
+      pt: "bbll_Lepton2_pt_NOSYS"
+      eta: "bbll_Lepton2_eta_NOSYS"
+      phi: "bbll_Lepton2_phi_NOSYS"
+      particle_id: "bbll_Lepton2_pdgid_NOSYS"
+    is_vector: false
+
+  # Pre-selected leading b-jet (scalar - one per event)
+  bjet1:
+    enabled: false
+    columns:
+      pt: "bbll_Jet_b1_pt_NOSYS"
+      eta: "bbll_Jet_b1_eta_NOSYS"
+      phi: "bbll_Jet_b1_phi_NOSYS"
+    fixed_particle_id: 13  # B meson category for b-jets
+    is_vector: false
+
+  # Pre-selected subleading b-jet (scalar - one per event)
+  bjet2:
+    enabled: false
+    columns:
+      pt: "bbll_Jet_b2_pt_NOSYS"
+      eta: "bbll_Jet_b2_eta_NOSYS"
+      phi: "bbll_Jet_b2_phi_NOSYS"
+    fixed_particle_id: 13  # B meson category for b-jets
+    is_vector: false
+
+# Particle ID mapping
+# Maps PartonTruthLabelID values to categorical IDs
+particle_id_map:
+  # Jet flavor labels (PartonTruthLabelID)
+  0: 7    # undefined/light jet -> pion-like
+  1: 7    # down quark jet
+  2: 7    # up quark jet
+  3: 7    # strange quark jet
+  4: 14   # charm jet -> D meson category
+  5: 13   # bottom jet -> B meson category
+  21: 7   # gluon jet -> pion-like
+  
+  # PDG codes for leptons (from bbll_Lepton*_pdgid)
+  11: 0   # electron
+  -11: 0  # positron
+  13: 1   # muon
+  -13: 1  # antimuon
+
+# Default ID for particles not in the map
+default_particle_id: 15
+
+# File-origin label map (glob pattern → integer label).
+# Patterns are matched against the file basename; first match wins.
+# Events from files that match no pattern receive label -1 (excluded from loss).
+# Set to an empty dict {} to disable this feature.
+file_event_label_map: {
+    "ttbar*" : 0,
+    "bbtt*" : 1
+  }
+
+# Total number of distinct event label classes.
+# Must be set to match the labels used in file_event_label_map when the feature is enabled.
+# This is the single source of truth; the model classification head is sized from this value.
+n_event_types: 2
+
+# Preprocessing configuration
+preprocessing:
+  pt_cut: 5.0           # Minimum pT in GeV (after scaling)
+  eta_cut: 4.5          # Maximum |eta|
+  max_particles: 50     # Maximum particles per event
+  pt_scale: 1000.0      # Data is in MeV, divide by 1000 for GeV
+  shuffle_particles: true  # Randomize particle order (good for training)
+
+# Train/validation/test split
+split:
+  train: 0.8
+  val: 0.1
+  test: 0.1
+  seed: 42
