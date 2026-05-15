@@ -119,7 +119,7 @@ class ParticleTrainer:
         # Store raw model reference and optionally wrap with DDP
         self.raw_model = model
         if self.is_distributed:
-            self.model = wrap_model_ddp(model, self.device)
+            self.model = wrap_model_ddp(model, self.device, find_unused_parameters=(self.mode == 'classify'))
         else:
             self.model = model.to(self.device)
         
