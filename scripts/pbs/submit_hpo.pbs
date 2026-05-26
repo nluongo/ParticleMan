@@ -1,0 +1,55 @@
+#!/bin/bash
+#PBS -j oe
+
+# ============================================================================
+# PBS Pro HPO Worker Script for ParticleMan
+# ============================================================================
+#
+# Runs one Optuna HPO worker (single GPU). Submit multiple copies of this
+# script with the same --study-name and --storage to run trials in parallel.
+# Optuna coordinates across workers via the shared SQLite (or RDB) study.
+#
+# Usage (via submit_hpo.sh):
+#   bash scripts/submit_hpo.sh 4
+#
+# Or manually:
+#   STORAGE="sqlite:////path/on/shared/fs/hpo_study.db"
+#   HPO_ARGS="--study-name my_study --storage ${STORAGE} --data-config bbllv08_classify --mode classify --epochs 5 --trials 5"
+#   qsub -l select=1:ngpus=1 -v HPO_ARGS="${HPO_ARGS}" scripts/pbs/submit_hpo.pbs
+#
+# Environment variables:
+#   HPO_ARGS  (required) — CLI arguments forwarded verbatim to scripts/hpo.py
+#
+# ============================================================================
+
+set -e
+
+echo "=============================================="
+echo "PBS Job ID: ${PBS_JOBID}"
+echo "Host:       $(hostname)"
+echo "Start:      $(date)"
+echo "Work dir:   ${PBS_O_WORKDIR}"
+echo "=============================================="
+
+cd "${PBS_O_WORKDIR}"
+
+source .venv/bin/activate
+
+if [ -z "${HPO_ARGS}" ]; then
+    echo "ERROR: HPO_ARGS environment variable is not set."
+    echo "Set it via:  qsub -v HPO_ARGS='--study-name ... --storage ...' scripts/pbs/submit_hpo.pbs"
+    exit 1
+fi
+
+# Each worker uses only the first visible GPU
+export CUDA_VISIBLE_DEVICES=0
+
+echo "HPO args: ${HPO_ARGS}"
+echo ""
+
+python scripts/hpo.py ${HPO_ARGS}
+
+echo ""
+echo "=============================================="
+echo "HPO worker finished at: $(date)"
+echo "=============================================="
