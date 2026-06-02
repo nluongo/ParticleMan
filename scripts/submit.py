@@ -37,31 +37,38 @@ PBS profiles live in configs/pbs/<name>.yaml.
 
 import argparse
 import subprocess
+import shutil
 import sys
+import time
+from collections import defaultdict
 from pathlib import Path
 
 from hydra import initialize_config_dir, compose
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.config_store import ConfigStore
 from omegaconf import OmegaConf
+from particleman.training import OutputManager
 
 REPO_ROOT = Path(__file__).parent.parent
 CONFIG_DIR = REPO_ROOT / "configs"
 PBS_SCRIPT = REPO_ROOT / "scripts" / "pbs" / "submit_training.pbs"
 
 # Prefixes that belong to the submit (PBS) config rather than the training config
-_SUBMIT_PREFIXES = ("pbs=", "pbs.", "+pbs", "~pbs", "++pbs")
+config_types = ["pbs"]
+PBS_SUBMIT_PREFIXES = ("pbs=", "pbs.", "+pbs", "~pbs", "++pbs")
 
 
 def split_overrides(args: list[str]) -> tuple[list[str], list[str]]:
     """Separate PBS-level overrides from training overrides."""
-    submit, train = [], []
+    split_configs = defaultdict(list)
     for arg in args:
-        if any(arg.startswith(p) for p in _SUBMIT_PREFIXES):
-            submit.append(arg)
-        else:
-            train.append(arg)
-    return submit, train
+        for config_type in config_types:
+            submit_prefixes = (f"{config_type}=", f"{config_type}.", f"+{config_type}", f"~{config_type}", f"++{config_type}")
+            if any(arg.startswith(p) for p in submit_prefixes):
+                split_configs[config_type].append(arg)
+        if not any(arg.startswith(p) for p in PBS_SUBMIT_PREFIXES):
+            split_configs["train"].append(arg)
+    return split_configs
 
 
 def compose_submit_config(submit_overrides: list[str]):
@@ -110,8 +117,9 @@ def build_qsub_command(pbs, train_overrides: list[str], config_name: str = "conf
     hydra_args_str = " ".join(cn_prefix + train_overrides)
 
     v_vars = ",".join([
-        f"HYDRA_ARGS={hydra_args_str}",
+        f"HYDRA_ARGS=\"{hydra_args_str}\"",
         f"NGPUS_PER_NODE={pbs.ngpus}",
+        f"WORLD_SIZE={pbs.ngpus*pbs.nnodes}",
         f"MASTER_PORT={pbs.master_port}",
         f"OMP_NUM_THREADS={pbs.omp_num_threads}",
         f"NCCL_DEBUG={pbs.nccl_debug}",
@@ -126,7 +134,7 @@ def build_qsub_command(pbs, train_overrides: list[str], config_name: str = "conf
         "-l", f"walltime={pbs.walltime}",
         "-l", build_select_string(pbs),
         build_filesystems_string(pbs),
-        #"-j", "oe",
+        "-j", "oe",
         "-v", v_vars,
         str(PBS_SCRIPT),
     ]
@@ -168,7 +176,9 @@ def main():
         print("Training configs: configs/<name>.yaml  (selected with --config-name/-cn)")
         sys.exit(0)
 
-    submit_overrides, train_overrides = split_overrides(remaining)
+    override_dict = split_overrides(remaining)
+    submit_overrides = override_dict["pbs"]
+    train_overrides = override_dict["train"]
 
     # Compose and validate PBS config via Hydra
     submit_cfg = compose_submit_config(submit_overrides)
@@ -182,10 +192,18 @@ def main():
 
     # Compose and validate training config via Hydra
     print("Validating training config...", flush=True)
-    compose_train_config(train_overrides, config_name=args.config_name)
+    train_config = compose_train_config(train_overrides, config_name=args.config_name)
+    print(train_config)
+
+    # Set a timestamp value to coordinate logging with submission
+    timestamp_element = train_config.output.get("timestamp", None)
+    if not timestamp_element:
+        timestamp = str(round(time.time()))
+        train_overrides += [f"output.timestamp={timestamp}"]
+    else:
+        timestamp = str(timestamp_element)
 
     cmd = build_qsub_command(pbs, train_overrides, config_name=args.config_name)
-
     print(f"Submitting with PBS profile: {pbs_profile}")
     print(f"  Nodes: {pbs.nnodes}  GPUs/node: {pbs.ngpus}  Walltime: {pbs.walltime}")
     if train_overrides:
@@ -201,7 +219,18 @@ def main():
         print("Dry run: not submitting.")
         return
 
-    result = subprocess.run(cmd)
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    job_id = result.stdout.strip().split('.')[0]
+
+    # Initialization causes directories to be created, not used further
+    output_manager = OutputManager(train_config.output.experiment_name, \
+                                    run_name=f"{timestamp}_pbs{job_id}")
+    
+    job_filename = f"job_{job_id}.pbs"
+    with open(job_filename, "w") as f:
+        f.write(" ".join(cmd))
+    shutil.copy(job_filename, output_manager.run_dir)
+
     sys.exit(result.returncode)
 
 

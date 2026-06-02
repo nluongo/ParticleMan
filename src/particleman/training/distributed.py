@@ -5,7 +5,10 @@ This module provides utilities for training across multiple GPUs using
 PyTorch's DistributedDataParallel (DDP).
 """
 
+import datetime
 import logging
+from mpi4py import MPI
+import socket
 import os
 from typing import Optional, Tuple
 
@@ -38,10 +41,27 @@ def setup_distributed(
         Tuple of (rank, world_size, device)
     """
     # Try to get rank and world_size from environment
-    if rank is None:
-        rank = int(os.environ.get("RANK", os.environ.get("PMI_RANK", 0)))
-    if world_size is None:
-        world_size = int(os.environ.get("WORLD_SIZE", os.environ.get("PMI_SIZE", 1)))
+    #if rank is None:
+    #    rank = int(os.environ.get("RANK", os.environ.get("PMI_RANK", 0)))
+    #if world_size is None:
+    #    world_size = int(os.environ.get("WORLD_SIZE", os.environ.get("PMI_SIZE", 1)))
+
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank()
+    world_size = comm.Get_size()
+
+    # Required by torch.distributed with init_method="env://"
+    os.environ["RANK"] = str(rank)
+    os.environ["WORLD_SIZE"] = str(world_size)
+
+    if rank == 0:
+        master_addr = socket.gethostname()
+    else:
+        master_addr = None
+
+    master_addr = comm.bcast(master_addr, root=0)
+    os.environ["MASTER_ADDR"] = master_addr
+    os.environ["MASTER_PORT"] = "2345"
     
     # Check if we're actually doing distributed training
     if world_size <= 1:
@@ -50,12 +70,19 @@ def setup_distributed(
         return 0, 1, device
     
     # Get local rank for GPU assignment
-    local_rank = int(os.environ.get("LOCAL_RANK", rank % torch.cuda.device_count()))
-    
+    #local_rank = int(os.environ.get("LOCAL_RANK", rank % torch.cuda.device_count()))
+
+    # Polaris: 4 GPUs/node, ranks packed by node with --ppn 4
+    local_rank = rank % 4
+    os.environ["LOCAL_RANK"] = str(local_rank)
+
+    # Strong per-rank binding
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(local_rank)
+
     # Set the device
     if torch.cuda.is_available():
-        torch.cuda.set_device(local_rank)
-        device = torch.device(f"cuda:{local_rank}")
+        torch.cuda.set_device(0)
+        device = torch.device(f"cuda:0")
     else:
         device = torch.device("cpu")
         backend = "gloo"  # NCCL doesn't support CPU
@@ -68,11 +95,7 @@ def setup_distributed(
         if "MASTER_PORT" not in os.environ:
             os.environ["MASTER_PORT"] = "29500"
         
-        dist.init_process_group(
-            backend=backend,
-            rank=rank,
-            world_size=world_size,
-        )
+        dist.init_process_group(backend=backend, init_method="env://", timeout=datetime.timedelta(seconds=60))
     
     logger.info(f"Initialized distributed training: rank={rank}, world_size={world_size}, device={device}")
     
