@@ -4,9 +4,11 @@ import math
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from scipy.optimize import linear_sum_assignment
 from torch import Tensor
 
 from .particle_transformer import (
@@ -205,6 +207,85 @@ class VAEParticleModel(nn.Module):
         }
 
 
+def _build_cost_matrix(
+    recon_pt: Tensor,
+    recon_eta: Tensor,
+    recon_phi: Tensor,
+    recon_id: Tensor,
+    exist: Tensor,
+    pt_norm_j: Tensor,
+    eta_norm_j: Tensor,
+    phi_norm_j: Tensor,
+    pid_j: Tensor,
+    existence_loss_weight: float,
+) -> np.ndarray:
+    """Build the (N, N) Hungarian cost matrix for one event (no gradients).
+
+    The first M columns correspond to real particles; the remaining N-M columns
+    correspond to null slots. linear_sum_assignment minimises the total cost,
+    so assigning a slot to null is cheap when its existence logit is low.
+
+    Args:
+        recon_pt/eta/phi: (N,) normalized decoder outputs for this event
+        recon_id:         (N, n_types) particle-ID logits
+        exist:            (N,) raw existence logits
+        pt_norm_j/eta_norm_j/phi_norm_j: (M,) normalized real-particle targets
+        pid_j:            (M,) long, real-particle IDs
+        existence_loss_weight: scalar weight applied to existence BCE inside cost
+
+    Returns:
+        cost: (N, N) float32 numpy array
+    """
+    N = recon_pt.shape[0]
+    M = pt_norm_j.shape[0]
+
+    # Work entirely with detached CPU tensors; no gradients needed for assignment.
+    with torch.no_grad():
+        rpt = recon_pt.detach().cpu()
+        reta = recon_eta.detach().cpu()
+        rphi = recon_phi.detach().cpu()
+        rid = recon_id.detach().cpu()
+        ex = exist.detach().cpu()
+        pt_j = pt_norm_j.detach().cpu()
+        eta_j = eta_norm_j.detach().cpu()
+        phi_j = phi_norm_j.detach().cpu()
+        pid = pid_j.detach().cpu()
+
+        # Pairwise squared differences: (N, M)
+        pt_cost  = (rpt.unsqueeze(1) - pt_j.unsqueeze(0)).pow(2)
+        eta_cost = (reta.unsqueeze(1) - eta_j.unsqueeze(0)).pow(2)
+        phi_cost = (rphi.unsqueeze(1) - phi_j.unsqueeze(0)).pow(2)
+
+        # Cross-entropy for each (slot, particle) pair via negative log-prob: (N, M)
+        log_probs = F.log_softmax(rid, dim=-1)   # (N, n_types)
+        id_cost = -log_probs[:, pid]              # (N, M)
+
+        # Existence BCE for matching to a real particle (target=1): (N,) → broadcast
+        exist_real_cost = F.binary_cross_entropy_with_logits(
+            ex, torch.ones_like(ex), reduction="none"
+        )  # (N,)
+
+        # Existence BCE for matching to null (target=0): (N,)
+        exist_null_cost = F.binary_cross_entropy_with_logits(
+            ex, torch.zeros_like(ex), reduction="none"
+        )  # (N,)
+
+        # Real-particle columns: recon cost + existence cost (target=1)
+        real_cols = (
+            pt_cost + eta_cost + phi_cost + id_cost
+            + existence_loss_weight * exist_real_cost.unsqueeze(1)
+        )  # (N, M)
+
+        # Null columns: existence cost (target=0), replicated N-M times
+        null_cols = (
+            existence_loss_weight * exist_null_cost.unsqueeze(1)
+        ).expand(N, N - M)  # (N, N-M)
+
+        cost = torch.cat([real_cols, null_cols], dim=1)  # (N, N)
+
+    return cost.numpy().astype(np.float32)
+
+
 def compute_vae_loss(
     recon: Dict[str, Tensor],
     targets: Dict[str, Tensor],
@@ -212,16 +293,25 @@ def compute_vae_loss(
     kl_weight: float = 1.0,
     existence_loss_weight: float = 1.0,
 ) -> Dict[str, Tensor]:
-    """Compute VAE ELBO loss.
+    """Compute VAE ELBO loss with Hungarian matching.
+
+    For each event, finds the optimal bijection between N decoder output slots
+    and M real particles + (N-M) null slots via the Hungarian algorithm.
+    This makes the loss permutation-invariant: swapping two particles in the
+    reconstruction incurs zero additional cost if all features are equal.
+
+    Slots matched to a real particle pay reconstruction loss + existence(target=1).
+    Slots matched to null pay existence(target=0).
 
     Args:
         recon: output dict from VAEParticleModel.forward()
         targets: dict with keys 'pt', 'eta', 'phi', 'particle_id', 'mask'
                  where mask is True for real particles (batch['mask'] convention)
-        encoder: ParticleTransformer instance — used to normalize continuous targets
-                 to the same scale as the decoder's output heads
+        encoder: ParticleTransformer — used to normalize continuous targets to
+                 the same scale as the decoder's output heads
         kl_weight: coefficient on KL term (caller handles warmup schedule)
-        existence_loss_weight: coefficient on existence BCE loss
+        existence_loss_weight: weight on existence BCE, both in the matching cost
+                               and in the final loss
 
     Returns dict with:
         total_loss, recon_pt_loss, recon_eta_loss, recon_phi_loss,
@@ -231,30 +321,88 @@ def compute_vae_loss(
     logvar = recon["logvar"]
     real_mask = targets["mask"]   # (B, S), True = real particle
     device = mu.device
+    B = mu.shape[0]
 
     # Normalize continuous targets to match decoder output scale
     pt_norm, eta_norm, phi_norm = encoder._normalize_features(
         targets["pt"], targets["eta"], targets["phi"]
     )
 
-    if real_mask.sum() > 0:
-        recon_pt_loss = F.mse_loss(recon["recon_pt"][real_mask], pt_norm[real_mask])
-        recon_eta_loss = F.mse_loss(recon["recon_eta"][real_mask], eta_norm[real_mask])
-        recon_phi_loss = F.mse_loss(recon["recon_phi"][real_mask], phi_norm[real_mask])
-        recon_particle_id_loss = F.cross_entropy(
-            recon["recon_particle_id"][real_mask],
-            targets["particle_id"][real_mask],
-        )
-    else:
-        recon_pt_loss = torch.tensor(0.0, device=device)
-        recon_eta_loss = torch.tensor(0.0, device=device)
-        recon_phi_loss = torch.tensor(0.0, device=device)
-        recon_particle_id_loss = torch.tensor(0.0, device=device)
+    recon_pt_acc = torch.tensor(0.0, device=device)
+    recon_eta_acc = torch.tensor(0.0, device=device)
+    recon_phi_acc = torch.tensor(0.0, device=device)
+    recon_id_acc = torch.tensor(0.0, device=device)
+    exist_acc = torch.tensor(0.0, device=device)
 
-    # Existence loss over all N slots (real particles should output 1, padding 0)
-    existence_loss = F.binary_cross_entropy_with_logits(
-        recon["existence_logit"], real_mask.float()
-    )
+    for b in range(B):
+        M = int(real_mask[b].sum().item())
+
+        exist_b = recon["existence_logit"][b]   # (N,)
+        ones = torch.ones(M, device=device)
+        null_count = exist_b.shape[0] - M
+        zeros = torch.zeros(null_count, device=device)
+
+        if M == 0:
+            # All slots should predict "no particle"
+            exist_acc = exist_acc + F.binary_cross_entropy_with_logits(
+                exist_b, torch.zeros_like(exist_b)
+            )
+            continue
+
+        # Build cost matrix and run Hungarian (no gradient)
+        cost = _build_cost_matrix(
+            recon["recon_pt"][b],
+            recon["recon_eta"][b],
+            recon["recon_phi"][b],
+            recon["recon_particle_id"][b],
+            exist_b,
+            pt_norm[b, real_mask[b]],
+            eta_norm[b, real_mask[b]],
+            phi_norm[b, real_mask[b]],
+            targets["particle_id"][b, real_mask[b]],
+            existence_loss_weight,
+        )
+        row_ind, col_ind = linear_sum_assignment(cost)
+
+        # Partition into real-particle matches and null matches
+        real_sel = col_ind < M
+        real_rows = row_ind[real_sel]          # output slot indices → real particles
+        real_cols = col_ind[real_sel]          # which real particle each slot maps to
+        null_rows = row_ind[~real_sel]         # output slot indices → null
+
+        # Reconstruction losses on matched real pairs (with gradients)
+        real_pt_targets = pt_norm[b, real_mask[b]][real_cols]
+        real_eta_targets = eta_norm[b, real_mask[b]][real_cols]
+        real_phi_targets = phi_norm[b, real_mask[b]][real_cols]
+        real_pid_targets = targets["particle_id"][b, real_mask[b]][real_cols]
+
+        recon_pt_acc = recon_pt_acc + F.mse_loss(
+            recon["recon_pt"][b][real_rows], real_pt_targets
+        )
+        recon_eta_acc = recon_eta_acc + F.mse_loss(
+            recon["recon_eta"][b][real_rows], real_eta_targets
+        )
+        recon_phi_acc = recon_phi_acc + F.mse_loss(
+            recon["recon_phi"][b][real_rows], real_phi_targets
+        )
+        recon_id_acc = recon_id_acc + F.cross_entropy(
+            recon["recon_particle_id"][b][real_rows], real_pid_targets
+        )
+
+        # Existence losses on matched slots (with gradients)
+        exist_real = F.binary_cross_entropy_with_logits(exist_b[real_rows], ones)
+        if null_rows.size > 0:
+            exist_null = F.binary_cross_entropy_with_logits(exist_b[null_rows], zeros)
+        else:
+            exist_null = torch.tensor(0.0, device=device)
+        exist_acc = exist_acc + (exist_real + exist_null) / 2
+
+    # Average over batch
+    recon_pt_loss = recon_pt_acc / B
+    recon_eta_loss = recon_eta_acc / B
+    recon_phi_loss = recon_phi_acc / B
+    recon_particle_id_loss = recon_id_acc / B
+    existence_loss = exist_acc / B
 
     # KL divergence: closed-form KL(q(z|x) || N(0,I))
     kl_loss = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp()).sum(dim=-1).mean()

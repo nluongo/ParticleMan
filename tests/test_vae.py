@@ -274,11 +274,66 @@ class TestComputeVAELoss:
         losses = compute_vae_loss(zero_recon, batch, model.encoder)
         assert torch.isclose(losses['kl_loss'], torch.tensor(0.0), atol=1e-5)
 
-    def test_existence_loss_uses_all_slots(self, model_and_batch) -> None:
+    def test_existence_loss_finite(self, model_and_batch) -> None:
         model, recon, batch = model_and_batch
-        # Existence loss should be finite even with mixed real/padding mask
         losses = compute_vae_loss(recon, batch, model.encoder)
         assert torch.isfinite(losses['existence_loss'])
+
+    def test_permutation_invariance(self, model_and_batch) -> None:
+        """Permuting real particles in the targets should not change the loss."""
+        model, recon, batch = model_and_batch
+        B, S = batch['pt'].shape
+        # All events have the same mask; find M (real particle count per event)
+        M = int(batch['mask'][0].sum().item())
+
+        perm = torch.randperm(M)
+        shuffled = {k: v.clone() for k, v in batch.items()}
+        shuffled['pt'][:, :M]           = batch['pt'][:, perm]
+        shuffled['eta'][:, :M]          = batch['eta'][:, perm]
+        shuffled['phi'][:, :M]          = batch['phi'][:, perm]
+        shuffled['particle_id'][:, :M]  = batch['particle_id'][:, perm]
+        # mask stays the same (same number of real particles, same positions)
+
+        loss_orig = compute_vae_loss(recon, batch, model.encoder, kl_weight=0.0)
+        loss_perm = compute_vae_loss(recon, shuffled, model.encoder, kl_weight=0.0)
+        assert torch.isclose(
+            loss_orig['total_loss'], loss_perm['total_loss'], atol=1e-4
+        ), f"Loss changed under permutation: {loss_orig['total_loss'].item():.6f} vs {loss_perm['total_loss'].item():.6f}"
+
+    def test_existence_false_positive_penalized(self, cfg: VAEConfig, model_and_batch) -> None:
+        """Slots matched to null should be penalized when existence logit is high.
+
+        With M=15 real and 5 null slots:
+          loud (+10 everywhere): null slots pay BCE(+10, 0)≈10 each → 5 false positives penalized
+          perfect (real=+10, null=-10): no false positives, no false negatives → lower loss
+        """
+        model, recon, batch = model_and_batch
+        B, N = recon['existence_logit'].shape
+        M = int(batch['mask'][0].sum().item())  # real particles per event
+
+        # Perfect existence prediction: real slots +10, null slots -10
+        perfect = torch.full((B, N), -10.0)
+        perfect[:, :M] = 10.0
+        perfect_recon = dict(recon)
+        perfect_recon['existence_logit'] = perfect
+        losses_perfect = compute_vae_loss(perfect_recon, batch, model.encoder, kl_weight=0.0)
+
+        # False-positive prediction: all slots predict +10 (all "real")
+        loud_recon = dict(recon)
+        loud_recon['existence_logit'] = torch.full_like(recon['existence_logit'], 10.0)
+        losses_loud = compute_vae_loss(loud_recon, batch, model.encoder, kl_weight=0.0)
+
+        # False positives (null slots predicting "real") inflate existence loss
+        assert losses_loud['existence_loss'].item() > losses_perfect['existence_loss'].item()
+
+    def test_existence_false_negative_penalized(self, model_and_batch) -> None:
+        """Slots matched to real particles should be penalized when existence logit is low."""
+        model, recon, batch = model_and_batch
+        quiet_recon = dict(recon)
+        quiet_recon['existence_logit'] = torch.full_like(recon['existence_logit'], -10.0)
+        losses = compute_vae_loss(quiet_recon, batch, model.encoder, kl_weight=0.0)
+        # All real slots predict 'no particle' → existence loss should be large
+        assert losses['existence_loss'].item() > 0.5
 
 
 # ---------------------------------------------------------------------------
