@@ -169,6 +169,7 @@ outputs/
 checkpoints/
 *.pkl
 *.pickle
+particleman_train.*
 
 # Temporary files
 *.tmp
