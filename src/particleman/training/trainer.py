@@ -18,6 +18,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from ..models.particle_transformer import ParticleTransformer, ParticleConfig
+from ..models.vae import VAEParticleModel, compute_vae_loss
 from ..loggers.base import BaseLogger, NoOpLogger
 from .distributed import (
     is_main_process,
@@ -40,7 +41,7 @@ class ParticleTrainer:
     
     def __init__(
         self,
-        model: ParticleTransformer,
+        model: Union[ParticleTransformer, VAEParticleModel],
         train_dataloader: DataLoader,
         val_dataloader: Optional[DataLoader] = None,
         num_epochs: int = 10,
@@ -86,8 +87,8 @@ class ParticleTrainer:
                 making this suitable for both fine-tuning and continued pre-training
                 with a new schedule.
         """
-        if mode not in ('pretrain', 'classify'):
-            raise ValueError(f"mode must be 'pretrain' or 'classify', got {mode!r}")
+        if mode not in ('pretrain', 'classify', 'vae'):
+            raise ValueError(f"mode must be 'pretrain', 'classify', or 'vae', got {mode!r}")
         self.mode = mode
         self.num_epochs = num_epochs
         self.rank = rank
@@ -119,7 +120,7 @@ class ParticleTrainer:
         # Store raw model reference and optionally wrap with DDP
         self.raw_model = model
         if self.is_distributed:
-            self.model = wrap_model_ddp(model, self.device, find_unused_parameters=(self.mode == 'classify'))
+            self.model = wrap_model_ddp(model, self.device, find_unused_parameters=(self.mode in ('classify', 'vae')))
         else:
             self.model = model.to(self.device)
         
@@ -141,6 +142,7 @@ class ParticleTrainer:
         self.step = 0
         self.epoch = 0
         self.best_val_loss = float('inf')
+        self._vae_step_count = 0  # tracks steps for KL warmup schedule
 
         # Profiling
         self.profile = profile
@@ -159,7 +161,7 @@ class ParticleTrainer:
         if pretrained_checkpoint is not None:
             self.load_pretrained_weights(pretrained_checkpoint)
     
-    def _get_model_for_inference(self) -> ParticleTransformer:
+    def _get_model_for_inference(self) -> Union[ParticleTransformer, VAEParticleModel]:
         """Get the underlying model (unwrapped from DDP if necessary)."""
         if hasattr(self.model, 'module'):
             return self.model.module
@@ -199,6 +201,54 @@ class ParticleTrainer:
 
         return None
     
+    def _vae_step(self, batch: Dict[str, torch.Tensor]) -> Optional[Dict[str, float]]:
+        """Perform a single VAE training step.
+
+        Encodes the full (unmasked) event into (mu, logvar), samples z, decodes to
+        particle slots, and optimizes the ELBO (reconstruction + KL divergence).
+        KL weight is linearly warmed up over kl_warmup_steps if configured.
+        """
+        self.model.train()
+
+        pt = batch['pt'].to(self.device)
+        eta = batch['eta'].to(self.device)
+        phi = batch['phi'].to(self.device)
+        particle_id = batch['particle_id'].to(self.device)
+        real_particle_mask = batch['mask'].to(self.device)
+        padding_mask = ~real_particle_mask
+
+        recon = self.model(pt, eta, phi, particle_id, padding_mask=padding_mask)
+
+        raw_model = self._get_model_for_inference()
+        target_kl_weight = raw_model.config.kl_weight
+        warmup_steps = raw_model.config.kl_warmup_steps
+        if warmup_steps > 0:
+            kl_weight = min(1.0, self._vae_step_count / warmup_steps) * target_kl_weight
+        else:
+            kl_weight = target_kl_weight
+
+        targets = {
+            'pt': pt,
+            'eta': eta,
+            'phi': phi,
+            'particle_id': particle_id,
+            'mask': real_particle_mask,
+        }
+
+        losses = compute_vae_loss(
+            recon=recon,
+            targets=targets,
+            encoder=raw_model.encoder,
+            kl_weight=kl_weight,
+            existence_loss_weight=raw_model.config.existence_loss_weight,
+        )
+        losses['kl_weight'] = torch.tensor(kl_weight, device=self.device)
+
+        loss = losses['total_loss'] / self.gradient_accumulation_steps
+        loss.backward()
+        self._vae_step_count += 1
+        return {k: v.item() for k, v in losses.items()}
+
     def _classify_step(self, batch: Dict[str, torch.Tensor]) -> Optional[Dict[str, float]]:
         """
         Perform a single classification step: supervised event label classification.
@@ -267,6 +317,8 @@ class ParticleTrainer:
         """
         if self.mode == 'classify':
             return self._classify_step(batch)
+        if self.mode == 'vae':
+            return self._vae_step(batch)
 
         self.model.train()
         
@@ -372,6 +424,22 @@ class ParticleTrainer:
                         'event_label_mask': labeled_mask,
                     }
                     losses = raw_model.compute_loss(predictions, targets)
+                elif self.mode == 'vae':
+                    recon = self.model(pt, eta, phi, particle_id, padding_mask=padding_mask)
+                    targets = {
+                        'pt': pt,
+                        'eta': eta,
+                        'phi': phi,
+                        'particle_id': particle_id,
+                        'mask': real_particle_mask,
+                    }
+                    losses = compute_vae_loss(
+                        recon=recon,
+                        targets=targets,
+                        encoder=raw_model.encoder,
+                        kl_weight=raw_model.config.kl_weight,
+                        existence_loss_weight=raw_model.config.existence_loss_weight,
+                    )
                 else:
                     event_label = batch['event_label'].to(self.device) if 'event_label' in batch else None
                     mask_result = self._create_masks_with_retry(

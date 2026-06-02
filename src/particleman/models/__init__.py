@@ -14,6 +14,7 @@ from .particle_transformer import (
     ConcatEmbedding,
     JointEmbedding,
 )
+from .vae import VAEParticleModel, VAEConfig, compute_vae_loss
 
 __all__ = [
     "ParticleTransformer",
@@ -24,4 +25,7 @@ __all__ = [
     "PhiEncoding",
     "ConcatEmbedding",
     "JointEmbedding",
+    "VAEParticleModel",
+    "VAEConfig",
+    "compute_vae_loss",
 ]

@@ -102,6 +102,15 @@ class ModelConfig:
     dropout: float = 0.1
     angular_attention_bias: bool = False  # Use AttentionBiasTransformer
     bias_hidden_dim: int = 32  # Hidden dim for angular attention bias MLP
+    # VAE (only active when training.mode == 'vae')
+    latent_dim: int = 64
+    kl_weight: float = 1.0
+    kl_warmup_steps: int = 0
+    vae_decoder_layers: int = 2
+    vae_decoder_heads: int = 4
+    vae_decoder_ff_dim: int = 512
+    n_decoder_queries: int = 0  # 0 = use max_particles
+    existence_loss_weight: float = 1.0
 
 
 # =============================================================================
@@ -123,7 +132,7 @@ class TrainingConfig:
     gradient_accumulation_steps: int = 1
     profile: bool = False
     pretrained_checkpoint: Optional[str] = None
-    mode: str = 'pretrain'  # 'pretrain' or 'classify'
+    mode: str = 'pretrain'  # 'pretrain', 'classify', or 'vae'
 
 
 # =============================================================================

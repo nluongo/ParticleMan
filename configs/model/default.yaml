@@ -12,3 +12,13 @@ d_model: 128
 n_heads: 2
 n_layers: 2
 dropout: 0.1
+
+# VAE (only active when training.mode=vae)
+latent_dim: 64
+kl_weight: 1.0
+kl_warmup_steps: 0
+vae_decoder_layers: 2
+vae_decoder_heads: 4
+vae_decoder_ff_dim: 512
+n_decoder_queries: 0
+existence_loss_weight: 1.0
