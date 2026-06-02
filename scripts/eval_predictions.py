@@ -107,8 +107,9 @@ def main(cfg: DictConfig) -> None:
     model_config: ParticleConfig = checkpoint["config"]
 
     logger.info(
-        f"Model: d_model={model_config.d_model}, n_heads={model_config.n_heads}, "
-        f"n_layers={model_config.n_layers}, phi_encoding={model_config.phi_encoding}"
+        f"Model: d_model={model_config.d_model}, d_ff={model_config.d_ff}, "
+        f"n_heads={model_config.n_heads}, n_layers={model_config.n_layers}, "
+        f"phi_encoding={model_config.phi_encoding}"
     )
 
     if model_config.angular_attention_bias:

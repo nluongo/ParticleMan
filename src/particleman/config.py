@@ -97,6 +97,7 @@ class ModelConfig:
     embedding: str = "joint"  # "joint" or "concat"
     phi_encoding: str = "raw"  # "raw", "sincos", or "none"
     d_model: int = 128
+    d_ff: int = 256
     n_heads: int = 2
     n_layers: int = 2
     dropout: float = 0.1
@@ -137,6 +138,7 @@ class OutputConfig:
 
     output_dir: str = "outputs"
     experiment_name: str = "ParticleMan_mc20_ttbar"
+    timestamp: Optional[str] = None
     run_name: Optional[str] = None
     log_interval: int = 1
     experiment_logger: str = "mlflow"  # "mlflow", "comet", "noop", "none"

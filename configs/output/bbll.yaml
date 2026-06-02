@@ -7,6 +7,8 @@ output_dir: outputs
 
 # Experiment name (groups related runs)
 experiment_name: ParticleMan_bbll
+# Timestamp portion of run_name, supplied during job submission
+timestamp: null
 # Run name (null for auto-generated timestamp)
 run_name: null
 

@@ -10,7 +10,7 @@ Usage:
     python scripts/train_mc20.py
     
     # Override values via CLI (note: key=value syntax)
-    python scripts/train_mc20.py training.epochs=20 model.d_model=256
+    python scripts/train_mc20.py training.epochs=20 model.d_model=256 model.d_ff=512
     
     # Use different sub-configs
     python scripts/train_mc20.py data=physlite model=default
@@ -31,6 +31,8 @@ Usage:
 
 from dataclasses import asdict
 import logging
+from mpi4py import MPI
+import os
 import sys
 from pathlib import Path
 
@@ -93,6 +95,7 @@ def main(cfg: TrainConfig) -> None:
         
         output = OutputManager(
             experiment_name=cfg.output.experiment_name,
+            timestamp=cfg.output.timestamp,
             run_name=cfg.output.run_name,
             base_dir=cfg.output.output_dir,
         )
@@ -226,7 +229,7 @@ def main(cfg: TrainConfig) -> None:
         d_model=cfg.model.d_model,
         n_heads=cfg.model.n_heads,
         n_layers=cfg.model.n_layers,
-        d_ff=cfg.model.d_model * 4,
+        d_ff=cfg.model.d_ff,
         dropout=cfg.model.dropout,
         max_particles=max_particles,
         n_particle_types=16,  # 0-15 particle categories
@@ -249,6 +252,7 @@ def main(cfg: TrainConfig) -> None:
         logger.info(f"  Embedding type: {model_config.embedding_type.value}")
         logger.info(f"  Phi encoding: {model_config.phi_encoding.value}")
         logger.info(f"  d_model: {model_config.d_model}")
+        logger.info(f"  d_ff: {model_config.d_ff}")
         logger.info(f"  n_heads: {model_config.n_heads}")
         logger.info(f"  n_layers: {model_config.n_layers}")
         logger.info(f"  mask_prob: {model_config.mask_prob}")

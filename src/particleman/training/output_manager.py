@@ -32,6 +32,7 @@ class OutputManager:
     def __init__(
         self,
         experiment_name: str,
+        timestamp: Optional[str] = None,
         run_name: Optional[str] = None,
         base_dir: str = "outputs",
     ) -> None:
@@ -40,6 +41,7 @@ class OutputManager:
         
         Args:
             experiment_name: Name of the experiment (groups related runs).
+            timestamp: Timestamp portion of run_name
             run_name: Name for this run. If None, auto-generated from timestamp.
             base_dir: Base directory for all outputs.
         """
@@ -48,7 +50,7 @@ class OutputManager:
         
         # Generate run name if not provided (timestamp, same as used for MLflow)
         if run_name is None:
-            run_name = self._generate_run_name()
+            run_name = self._generate_run_name(timestamp)
         self.run_name = run_name
         
         # Set up directory structure
@@ -59,14 +61,18 @@ class OutputManager:
         
         self._create_directories()
     
-    def _generate_run_name(self) -> str:
+    def _generate_run_name(self, timestamp=None) -> str:
         """
         Generate a unique run name.
         
         Uses Unix timestamp for consistency with MLflow run_name.
         Appends PBS/SLURM job ID if available.
+
+        Args:
+            timestamp: Timestamp portion of run name, optional
         """
-        timestamp = str(round(time.time()))
+        if not timestamp:
+            timestamp = str(round(time.time()))
         
         # Append job ID if in batch environment
         pbs_jobid = os.environ.get("PBS_JOBID")

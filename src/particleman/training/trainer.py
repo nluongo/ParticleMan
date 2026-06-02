@@ -595,10 +595,10 @@ class ParticleTrainer:
                     # Save best model
                     if val_loss < self.best_val_loss:
                         self.best_val_loss = val_loss
-                        self.save_checkpoint(f"best_model_epoch_{epoch+1}.pt")
+                        self.save_checkpoint(f"best_model.pt")
 
                 # Save periodic checkpoint
-                if (epoch + 1) % 5 == 0:
+                if (epoch + 1) % 10 == 0:
                     self.save_checkpoint(f"checkpoint_epoch_{epoch+1}.pt")
 
                 # Synchronize before next epoch (if distributed)

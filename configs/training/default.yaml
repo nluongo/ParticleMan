@@ -5,7 +5,7 @@
 # Number of training epochs
 epochs: 10
 # Batch size per GPU
-batch_size: 256
+batch_size: 32
 # Learning rate
 lr: 1.0e-4
 # Weight decay for AdamW optimizer
@@ -15,7 +15,7 @@ mask_prob: 0.15
 # Probability of masking the event label during pre-training
 event_label_mask_prob: 0.15
 # Number of data loading workers
-num_workers: 0
+num_workers: 32
 # Gradient accumulation steps (for effective larger batch sizes)
 gradient_accumulation_steps: 1
 # Enable torch.profiler to trace the training loop
