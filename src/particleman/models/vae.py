@@ -139,6 +139,66 @@ class VAEParticleModel(nn.Module):
         # Existence: raw logit (real=1, padding=0); BCE loss in compute_vae_loss
         self.existence_head = nn.Linear(d, 1)
 
+    def _denormalize_features(
+        self, pt_norm: Tensor, eta_norm: Tensor, phi_norm: Tensor
+    ) -> Tuple[Tensor, Tensor, Tensor]:
+        """Invert _normalize_features to recover physical units."""
+        pt_lo, pt_hi = self.config.pt_range
+        eta_lo, eta_hi = self.config.eta_range
+        phi_lo, phi_hi = self.config.phi_range
+
+        pt  = pt_norm  * (pt_hi  - pt_lo)  + pt_lo
+        eta = (eta_norm + 1) / 2 * (eta_hi - eta_lo) + eta_lo
+        phi = (phi_norm + 1) / 2 * (phi_hi - phi_lo) + phi_lo
+        return pt, eta, phi
+
+    def generate(
+        self,
+        n_events: int,
+        device: Optional[torch.device] = None,
+        existence_threshold: float = 0.5,
+    ) -> Dict[str, Tensor]:
+        """Generate new particle events by sampling from the prior.
+
+        Args:
+            n_events: Number of events to generate.
+            device: Device to run on; defaults to the model's current device.
+            existence_threshold: Sigmoid threshold for the existence logit above
+                which a slot is treated as a real particle.
+
+        Returns dict with keys:
+            pt, eta, phi: (B, N) in physical units
+            particle_id: (B, N) long, categorical
+            existence: (B, N) sigmoid probabilities
+            mask: (B, N) bool, True = real particle (existence > threshold)
+        """
+        if device is None:
+            device = next(self.parameters()).device
+
+        self.eval()
+        with torch.no_grad():
+            z = torch.randn(n_events, self.config.latent_dim, device=device)
+            memory = self.latent_to_decoder(z).unsqueeze(1)          # (B, 1, d)
+            tgt = self.query_tokens.expand(n_events, -1, -1)          # (B, N, d)
+            dec_out = self.decoder(tgt, memory)                        # (B, N, d)
+
+            pt_norm  = self.recon_pt_head(dec_out).squeeze(-1)         # (B, N)
+            eta_norm = self.recon_eta_head(dec_out).squeeze(-1)        # (B, N)
+            phi_norm = self.recon_phi_head(dec_out).squeeze(-1)        # (B, N)
+            particle_id = self.recon_particle_id_head(dec_out).argmax(-1)  # (B, N)
+            existence = self.existence_head(dec_out).squeeze(-1).sigmoid()  # (B, N)
+
+            pt, eta, phi = self._denormalize_features(pt_norm, eta_norm, phi_norm)
+
+        return {
+            "pt": pt,
+            "eta": eta,
+            "phi": phi,
+            "particle_id": particle_id,
+            "existence": existence,
+            "mask": existence > existence_threshold,
+        }
+
     def _reparameterize(self, mu: Tensor, logvar: Tensor) -> Tensor:
         """Sample z from q(z|x) = N(mu, exp(logvar)) via reparameterization trick."""
         if self.training:
