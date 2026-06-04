@@ -213,7 +213,7 @@ def main(cfg: DictConfig) -> None:
             f"Skipped {skipped} batches (no masked particles after {max_mask_attempts} attempts)"
         )
 
-    if not any(buckets["target_pt"]):
+    if not any([bucket.numel() > 0 for bucket in buckets["target_pt"]]):
         logger.error("No data collected — check that the dataloader returned batches")
         sys.exit(1)
 
