@@ -208,8 +208,6 @@ class ParticleTrainer:
         particle slots, and optimizes the ELBO (reconstruction + KL divergence).
         KL weight is linearly warmed up over kl_warmup_steps if configured.
         """
-        self.model.train()
-
         pt = batch['pt'].to(self.device)
         eta = batch['eta'].to(self.device)
         phi = batch['phi'].to(self.device)
@@ -257,8 +255,6 @@ class ParticleTrainer:
         valid label (event_label != -1). Requires the model to have n_event_types > 0.
         Works with both randomly initialized and pretrained model weights.
         """
-        self.model.train()
-
         pt = batch['pt'].to(self.device)
         eta = batch['eta'].to(self.device)
         phi = batch['phi'].to(self.device)
@@ -315,12 +311,13 @@ class ParticleTrainer:
         Returns:
             Dictionary of loss values, or None if batch was skipped
         """
+        self.model.train()
+
         if self.mode == 'classify':
             return self._classify_step(batch)
         if self.mode == 'vae':
             return self._vae_step(batch)
 
-        self.model.train()
         
         # Move batch to device
         pt = batch['pt'].to(self.device)
