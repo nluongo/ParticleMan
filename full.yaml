@@ -1,0 +1,76 @@
+# ParticleMan Training Configuration
+#
+# This is the default configuration for training ParticleMan models.
+# Override any value via CLI using dot notation:
+#   python scripts/train_mc20.py training.epochs=20 model.d_model=256
+#
+# Or use a different config file:
+#   python scripts/train_mc20.py --config-name=my_experiment
+
+# Data settings
+data:
+  # Path to data source configuration (defines collections, preprocessing, etc.)
+  config: configs/data/mc20_ttbar.yaml
+  # Maximum number of events to load (null for all)
+  max_events: 10000
+
+# Model architecture
+model:
+  # Embedding type: "joint" (Particle Transformer style) or "concat"
+  embedding: joint
+  # Phi encoding: "raw" (normalized) or "sincos" (sin/cos components)
+  phi_encoding: raw
+  # Transformer model dimension
+  d_model: 128
+  # Number of attention heads
+  n_heads: 2
+  # Number of transformer layers
+  n_layers: 2
+  # Dropout probability
+  dropout: 0.1
+
+# Training hyperparameters
+training:
+  # Number of training epochs
+  epochs: 10
+  # Batch size per GPU
+  batch_size: 256
+  # Learning rate
+  lr: 1.0e-4
+  # Weight decay for AdamW optimizer
+  weight_decay: 0.01
+  # Probability of masking each particle for pre-training
+  mask_prob: 0.15
+  # Number of data loading workers
+  num_workers: 0
+  # Gradient accumulation steps (for effective larger batch sizes)
+  gradient_accumulation_steps: 1
+
+# Output and logging settings
+output:
+  # Base directory for all outputs (checkpoints, logs, etc.)
+  output_dir: outputs
+  # Experiment name (groups related runs)
+  experiment_name: ParticleMan_mc20_ttbar
+  # Run name (auto-generated timestamp if null)
+  run_name: null
+  # How often to log training stats (in steps)
+  log_interval: 1
+  # Experiment logger: "mlflow", "comet", "noop", or "none"
+  experiment_logger: mlflow
+
+# Distributed training settings
+distributed:
+  # Backend: "nccl" (GPU) or "gloo" (CPU)
+  backend: nccl
+
+# Hydra configuration
+hydra:
+  run:
+    # Disable Hydra's automatic output directory management
+    # We use OutputManager instead for consistent output structure
+    dir: .
+  output_subdir: null
+  job:
+    # Don't change working directory
+    chdir: false

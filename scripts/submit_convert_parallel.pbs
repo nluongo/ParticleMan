@@ -1,0 +1,11 @@
+#!/bin/bash
+#PBS -N ntuple_to_h5
+#PBS -l select=1:ncpus=128:mpiprocs=128
+#PBS -l walltime=12:00:00
+#PBS -q compute
+#PBS -A ATLAS-HEP-GROUP
+#PBS -j oe
+
+cd $PBS_O_WORKDIR
+
+source scripts/batch_convert_parallel.sh

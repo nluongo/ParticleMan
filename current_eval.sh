@@ -1,0 +1,1 @@
+uv run scripts/eval_predictions.py ++checkpoint=/lcrc/group/ATLAS/users/nluongo/ParticleMan/checkpoints/best_model_epoch_110.pt ++out_file=predictions.npz ++eval_split=val data=bbllv08 data.max_events=5000
