@@ -233,6 +233,32 @@ The conversion maps PDG particle codes to categorical IDs (0-15):
 
 See `scripts/README.md` for complete documentation.
 
+## Running on a Cluster
+
+Batch jobs are submitted with `scripts/submit.py`, which supports PBS and Slurm.
+Site settings (scheduler, account, queue, launcher, setup script) live in
+`configs/cluster/`, and job sizes live in `configs/resources/`:
+
+```bash
+# PBS, 2 nodes x 4 GPUs
+python scripts/submit.py cluster=pbs_example resources=multi_node data=bbllv08
+
+# Slurm, 8 GPUs on one node, longer walltime
+python scripts/submit.py cluster=slurm_example resources=multi_gpu \
+    resources.walltime=16:00:00 data=bbllv08
+
+# Print the submit command and job environment without submitting
+python scripts/submit.py --dry-run cluster=slurm_example resources=multi_node
+```
+
+For interactive multi-GPU runs, start from inside an allocation (`qsub -I`,
+`salloc`) or on a GPU workstation:
+
+```bash
+bash scripts/jobs/launch.sh scripts/train.py data=bbllv08 training=quick_test
+LAUNCHER=srun bash scripts/jobs/launch.sh scripts/train.py data=bbllv08
+```
+
 ## Development
 
 ### Setting up the Development Environment
