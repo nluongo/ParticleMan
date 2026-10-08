@@ -80,7 +80,7 @@ def main(cfg: TrainConfig) -> None:
     # Setup distributed environment (returns rank=0, world_size=1 for single GPU)
     rank, world_size, device = setup_distributed(
         backend=cfg.distributed.backend,
-        use_mpi=cfg.distributed.get("use_mpi", False),
+        timeout_s=cfg.distributed.get("timeout_s", 60),
     )
     is_distributed = world_size > 1
     

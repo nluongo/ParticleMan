@@ -62,7 +62,7 @@ bash_cmd='
         export LOCAL_RANK=$((PMI_RANK % NGPUS_PER_NODE))
         export CUDA_VISIBLE_DEVICES=$LOCAL_RANK
         echo "host=$(hostname) RANK=$RANK LOCAL_RANK=$LOCAL_RANK CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
-        python $TRAIN_SCRIPT $HYDRA_ARGS $HPO_ARGS distributed.use_mpi=true
+        python $TRAIN_SCRIPT $HYDRA_ARGS $HPO_ARGS
     '
 echo "Bash CMD"
 echo $bash_cmd

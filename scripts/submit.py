@@ -91,25 +91,6 @@ def compose_train_config(train_overrides: list[str], config_name: str = "config"
         return compose(config_name=config_name, overrides=train_overrides)
 
 
-def check_launcher_consistency(pbs, train_config) -> None:
-    """Ensure pbs.launcher and distributed.use_mpi agree.
-
-    mpiexec launches don't set torchrun-style rank env vars, so rank discovery
-    must go through mpi4py (use_mpi=true); torchrun launches must not use it.
-    """
-    launcher = pbs.get("launcher", "torchrun")
-    use_mpi = bool(train_config.distributed.get("use_mpi", False))
-    if (launcher == "mpiexec") != use_mpi:
-        print(
-            f"ERROR: pbs.launcher={launcher} is incompatible with "
-            f"distributed.use_mpi={str(use_mpi).lower()}.\n"
-            "  Use pbs.launcher=mpiexec with distributed.use_mpi=true, or\n"
-            "  pbs.launcher=torchrun with distributed.use_mpi=false.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-
 def build_select_string(pbs) -> str:
     out = ""
     if pbs.get("nnodes", None):
@@ -213,7 +194,6 @@ def main():
     print("Validating training config...", flush=True)
     train_config = compose_train_config(train_overrides, config_name=args.config_name)
     print(train_config)
-    check_launcher_consistency(pbs, train_config)
 
     # Set a timestamp value to coordinate logging with submission
     timestamp_element = train_config.output.get("timestamp", None)

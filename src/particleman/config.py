@@ -154,7 +154,7 @@ class DistributedConfig:
     """Distributed training configuration."""
 
     backend: str = "nccl"  # "nccl" or "gloo"
-    use_mpi: bool = False  # Discover rank/world size via mpi4py (mpiexec launches)
+    timeout_s: int = 60  # Process group initialization timeout (seconds)
 
 
 # =============================================================================

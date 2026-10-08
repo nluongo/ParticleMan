@@ -7,9 +7,8 @@ PyTorch's DistributedDataParallel (DDP).
 
 import datetime
 import logging
-import socket
 import os
-from typing import Optional, Tuple
+from typing import Mapping, Optional, Tuple
 
 import torch
 import torch.distributed as dist
@@ -19,79 +18,87 @@ from torch.utils.data import DataLoader, DistributedSampler
 logger = logging.getLogger(__name__)
 
 
-def _rank_info_from_mpi() -> Tuple[int, int, int]:
-    """
-    Discover rank info via mpi4py and export it for torch.distributed.
+# Env vars that launchers set, in priority order: (rank, world_size, local_rank).
+# torchrun comes first so torchrun-inside-srun uses torchrun's per-GPU ranks
+# rather than srun's per-node task IDs.
+_RANK_ENV_SOURCES = (
+    ("torchrun", "RANK", "WORLD_SIZE", ("LOCAL_RANK",)),
+    ("slurm", "SLURM_PROCID", "SLURM_NTASKS", ("SLURM_LOCALID",)),
+    ("mpich", "PMI_RANK", "PMI_SIZE", ("PALS_LOCAL_RANKID", "MPI_LOCALRANKID")),
+    (
+        "openmpi",
+        "OMPI_COMM_WORLD_RANK",
+        "OMPI_COMM_WORLD_SIZE",
+        ("OMPI_COMM_WORLD_LOCAL_RANK",),
+    ),
+)
 
-    Used for mpiexec launches, where torchrun-style env vars are not set.
-    Rank 0's hostname is broadcast as MASTER_ADDR.
+
+def detect_rank_info(
+    env: Mapping[str, str], gpus_per_node: Optional[int] = None
+) -> Tuple[int, int, int, str]:
+    """
+    Detect process rank info from launcher environment variables.
+
+    Supports torchrun, Slurm srun, MPICH/PALS mpiexec and OpenMPI mpirun.
+
+    Args:
+        env: Environment mapping (usually os.environ)
+        gpus_per_node: Used to derive local_rank when the launcher doesn't set
+            one (falls back to GPUS_PER_NODE in env, then 1)
 
     Returns:
-        Tuple of (rank, world_size, local_rank)
+        Tuple of (rank, world_size, local_rank, source), where source names the
+        launcher detected ("none" for a plain single process)
     """
-    try:
-        from mpi4py import MPI
-    except ImportError as e:
-        raise ImportError(
-            "distributed.use_mpi=true requires mpi4py. Install it in the environment "
-            "(preferably built against the system MPI) or set distributed.use_mpi=false."
-        ) from e
-
-    comm = MPI.COMM_WORLD
-    rank = comm.Get_rank()
-    world_size = comm.Get_size()
-
-    # Required by torch.distributed with init_method="env://"
-    os.environ["RANK"] = str(rank)
-    os.environ["WORLD_SIZE"] = str(world_size)
-
-    if rank == 0:
-        master_addr = socket.gethostname()
-    else:
-        master_addr = None
-
-    master_addr = comm.bcast(master_addr, root=0)
-    os.environ["MASTER_ADDR"] = master_addr
-    os.environ["MASTER_PORT"] = "2345"
-
-    # Polaris: 4 GPUs/node, ranks packed by node with --ppn 4
-    local_rank = rank % 4
-
-    return rank, world_size, local_rank
+    for source, rank_var, size_var, local_vars in _RANK_ENV_SOURCES:
+        if rank_var in env and size_var in env:
+            rank = int(env[rank_var])
+            world_size = int(env[size_var])
+            local_rank = next(
+                (int(env[v]) for v in local_vars if v in env), None
+            )
+            if local_rank is None:
+                if gpus_per_node is None:
+                    gpus_per_node = int(env.get("GPUS_PER_NODE", 1))
+                local_rank = rank % max(gpus_per_node, 1)
+            return rank, world_size, local_rank, source
+    return 0, 1, 0, "none"
 
 
 def setup_distributed(
     rank: Optional[int] = None,
     world_size: Optional[int] = None,
     backend: str = "nccl",
-    use_mpi: bool = False,
+    timeout_s: int = 60,
 ) -> Tuple[int, int, torch.device]:
     """
     Initialize distributed training environment.
     
     This function handles both:
     - Manual setup (rank/world_size provided)
-    - Environment-based setup (from SLURM, PBS, or torchrun)
+    - Environment-based setup (torchrun, srun or mpiexec; see detect_rank_info)
+
+    MASTER_ADDR/MASTER_PORT must be set by the launcher (scripts/jobs/launch.sh
+    exports them); they default to localhost:29500.
     
     Args:
         rank: Process rank (auto-detected if None)
         world_size: Total number of processes (auto-detected if None)
         backend: Distributed backend ("nccl" for GPU, "gloo" for CPU)
-        use_mpi: Discover rank/world_size via mpi4py (for mpiexec launches).
-            mpi4py is only imported when this is True.
+        timeout_s: Process group initialization timeout in seconds
     
     Returns:
         Tuple of (rank, world_size, device)
     """
-    if use_mpi:
-        rank, world_size, local_rank = _rank_info_from_mpi()
-    else:
-        if rank is None:
-            rank = int(os.environ.get("RANK", os.environ.get("PMI_RANK", 0)))
-        if world_size is None:
-            world_size = int(os.environ.get("WORLD_SIZE", os.environ.get("PMI_SIZE", 1)))
-        n_gpus = max(torch.cuda.device_count(), 1)
-        local_rank = int(os.environ.get("LOCAL_RANK", rank % n_gpus))
+    gpus_per_node = torch.cuda.device_count() or None
+    env_rank, env_world_size, local_rank, source = detect_rank_info(
+        os.environ, gpus_per_node=gpus_per_node
+    )
+    if rank is None:
+        rank = env_rank
+    if world_size is None:
+        world_size = env_world_size
 
     # Check if we're actually doing distributed training
     if world_size <= 1:
@@ -99,15 +106,17 @@ def setup_distributed(
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         return 0, 1, device
 
+    logger.info(f"Detected launcher environment: {source}")
+
+    # Required by torch.distributed with init_method="env://"
+    os.environ["RANK"] = str(rank)
+    os.environ["WORLD_SIZE"] = str(world_size)
     os.environ["LOCAL_RANK"] = str(local_rank)
-    if use_mpi:
-        # Strong per-rank binding
-        os.environ["CUDA_VISIBLE_DEVICES"] = str(local_rank)
 
     # Set the device
     if torch.cuda.is_available():
-        # With per-rank binding (MPI, or CUDA_VISIBLE_DEVICES set by the launcher)
-        # only one device is visible; under torchrun all node GPUs are visible.
+        # If the launcher binds one GPU per rank only one device is visible;
+        # otherwise all node GPUs are visible and local_rank picks one.
         device_index = local_rank % torch.cuda.device_count()
         torch.cuda.set_device(device_index)
         device = torch.device(f"cuda:{device_index}")
@@ -123,7 +132,7 @@ def setup_distributed(
         if "MASTER_PORT" not in os.environ:
             os.environ["MASTER_PORT"] = "29500"
         
-        dist.init_process_group(backend=backend, init_method="env://", timeout=datetime.timedelta(seconds=60))
+        dist.init_process_group(backend=backend, init_method="env://", timeout=datetime.timedelta(seconds=timeout_s))
     
     logger.info(f"Initialized distributed training: rank={rank}, world_size={world_size}, device={device}")
     
