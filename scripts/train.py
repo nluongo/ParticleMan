@@ -6,7 +6,7 @@ Supports both single-GPU and distributed multi-GPU/multi-node training.
 Configuration is managed via YAML files and command-line overrides.
 
 Usage:
-    # Use default config (mc20_ttbar)
+    # Use default config (configs/config.yaml)
     python scripts/train.py
     
     # Override values via CLI (note: key=value syntax)

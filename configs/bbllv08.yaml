@@ -1,15 +1,15 @@
-# ParticleMan Training Configuration: mc20 ttbar
+# ParticleMan Training Configuration: bbllv08
 #
 # This is the root configuration that composes all sub-configs.
 #
 # Usage:
-#   python scripts/train_mc20.py --config-name=mc20_ttbar
+#   python scripts/train.py --config-name=bbllv08
 #
 # Override any value via CLI:
-#   python scripts/train_mc20.py --config-name=mc20_ttbar training.epochs=20
+#   python scripts/train.py --config-name=bbllv08 training.epochs=20
 #
 # Switch sub-configs:
-#   python scripts/train_mc20.py --config-name=mc20_ttbar model=default
+#   python scripts/train.py --config-name=bbllv08 model=default
 
 defaults:
   - data: bbllv08

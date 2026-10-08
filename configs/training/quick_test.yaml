@@ -4,7 +4,7 @@
 # Uses fewer epochs and smaller batches for fast iteration.
 #
 # Usage:
-#   python scripts/train_mc20.py training=quick_test
+#   python scripts/train.py training=quick_test
 
 epochs: 2
 batch_size: 64
