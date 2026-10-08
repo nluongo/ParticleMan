@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, master, develop ]
   pull_request:
-    branches: [ main, develop ]
+    branches: [ main, master, develop ]
 
 jobs:
   test:
@@ -50,7 +50,7 @@ jobs:
 
     - name: Test with pytest
       run: |
-        pytest src/particleman/tests/ --cov=particleman --cov-report=xml --cov-report=term-missing -v
+        pytest tests/ --cov=particleman --cov-report=xml --cov-report=term-missing -v
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3
@@ -84,7 +84,7 @@ jobs:
 
     - name: Test with pytest (conda environment)
       run: |
-        pytest src/particleman/tests/ -v
+        pytest tests/ -v
 
   security:
     runs-on: ubuntu-latest

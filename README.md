@@ -286,7 +286,7 @@ pytest
 pytest --cov=particleman
 
 # Run specific test file
-pytest src/particleman/tests/test_version.py
+pytest tests/test_basic.py
 ```
 
 ## Project Structure
@@ -296,17 +296,17 @@ particleman/
 ├── src/
 │   └── particleman/
 │       ├── __init__.py
+│       ├── config.py              # Hydra structured config dataclasses
 │       ├── data/                  # Data loading module
-│       │   ├── config.py          # Configuration dataclasses
 │       │   ├── base_loader.py     # Abstract base loader
 │       │   ├── root_loader.py     # ROOT file loader (uproot)
 │       │   ├── hdf5_loader.py     # HDF5 file loader
 │       │   └── dataset.py         # PyTorch Dataset wrapper
 │       ├── models/
 │       │   └── particle_transformer.py
-│       ├── training/
-│       │   └── trainer.py
-│       └── tests/
+│       └── training/
+│           └── trainer.py
+├── tests/                         # pytest test suite
 ├── configs/
 │   └── data/                      # Data configuration files
 │       ├── default.yaml

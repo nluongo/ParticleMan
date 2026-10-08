@@ -16,7 +16,7 @@ This is ParticleMan, a framework for pre-training foundation models for particle
 
 ### Project Structure
 - Use src/ layout: all code goes in src/particleman/
-- Tests go in src/particleman/tests/
+- Tests go in the top-level tests/ directory
 - Follow modular, readable, and safe coding practices
 - Keep functions small and focused
 - Use descriptive variable and function names
@@ -31,7 +31,7 @@ This is ParticleMan, a framework for pre-training foundation models for particle
 ### Testing
 - Use pytest for all testing
 - Maintain high test coverage
-- Tests should be in src/particleman/tests/
+- Tests should be in the top-level tests/ directory
 - Use descriptive test names
 - Test both happy path and edge cases
 
@@ -101,11 +101,11 @@ src/particleman/
 ├── models/              # Model definitions (when needed)
 ├── data/                # Data handling utilities (when needed)
 ├── training/            # Training logic (when needed)
-├── utils/               # Utility functions (when needed)
-└── tests/               # All tests
-    ├── __init__.py
-    ├── test_*.py        # Test files
-    └── conftest.py      # Test configuration (when needed)
+└── utils/               # Utility functions (when needed)
+tests/                   # All tests (top level, outside src/)
+├── __init__.py
+├── test_*.py            # Test files
+└── conftest.py          # Test configuration (when needed)
 ```
 
 ### Pre-commit Hooks
