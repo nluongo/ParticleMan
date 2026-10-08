@@ -4,3 +4,7 @@
 
 # Backend: "nccl" (GPU, recommended) or "gloo" (CPU)
 backend: nccl
+# Use mpi4py to discover rank/world size (required when launching with mpiexec).
+# When false, rank info is read from torchrun-style env vars (RANK, WORLD_SIZE, LOCAL_RANK)
+# and mpi4py is never imported.
+use_mpi: false

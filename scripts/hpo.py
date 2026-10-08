@@ -30,7 +30,6 @@ os.environ["TORCH_NCCL_BLOCKING_WAIT"] = "1"
 
 import argparse
 import logging
-from mpi4py import MPI
 import optuna
 import sys
 import torch
@@ -143,7 +142,10 @@ def build_objective(cfg: dict):
     data_cfg = cfg.data
 
     # Setup distributed environment (returns rank=0, world_size=1 for single GPU)
-    rank, world_size, device = setup_distributed(backend=["gloo", "nccl"])
+    rank, world_size, device = setup_distributed(
+        backend=["gloo", "nccl"],
+        use_mpi=cfg.distributed.get("use_mpi", False),
+    )
     is_distributed = world_size > 1
  
     train_loader, val_loader = get_loaders(cfg, is_distributed, rank, world_size)
@@ -292,7 +294,10 @@ def main(cfg: TrainConfig) -> None:
     storage = cfg.get("storage", "sqlite:///hpo_study.db")
 
     # Setup distributed environment (returns rank=0, world_size=1 for single GPU)
-    rank, world_size, device = setup_distributed(backend=cfg.distributed.backend)
+    rank, world_size, device = setup_distributed(
+        backend=cfg.distributed.backend,
+        use_mpi=cfg.distributed.get("use_mpi", False),
+    )
     is_distributed = world_size > 1
 
     storage = optuna.storages.RDBStorage(

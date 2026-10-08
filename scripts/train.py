@@ -31,7 +31,6 @@ Usage:
 
 from dataclasses import asdict
 import logging
-from mpi4py import MPI
 import os
 import sys
 from pathlib import Path
@@ -79,7 +78,10 @@ cs.store(name="config_schema", node=TrainConfig)
 def main(cfg: TrainConfig) -> None:
     """Main training function."""
     # Setup distributed environment (returns rank=0, world_size=1 for single GPU)
-    rank, world_size, device = setup_distributed(backend=cfg.distributed.backend)
+    rank, world_size, device = setup_distributed(
+        backend=cfg.distributed.backend,
+        use_mpi=cfg.distributed.get("use_mpi", False),
+    )
     is_distributed = world_size > 1
     
     # Log resolved configuration (only on main process)
