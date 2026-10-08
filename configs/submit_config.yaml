@@ -1,3 +1,18 @@
+# Job submission configuration for scripts/submit.py
+#
+#   cluster=<site>      Site settings: scheduler, account, queue, launcher, env
+#   resources=<size>    Job size: nodes, GPUs, CPUs, memory, walltime
+#   job.*               Per-job settings
+#
+# Example:
+#   python scripts/submit.py cluster=slurm_example resources=multi_gpu data=bbllv08
+
 defaults:
-  - pbs: default
+  - cluster: pbs_example
+  - resources: single_gpu
   - _self_
+
+job:
+  # Scheduler job name (also names the <name>.o<job_id> output file)
+  name: particleman_train
+  nccl_debug: WARN

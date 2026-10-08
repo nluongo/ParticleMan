@@ -1,0 +1,27 @@
+# @package cluster
+#
+# Example PBS Pro site. Copy and edit for your cluster.
+
+scheduler: pbs
+account: ATLAS-HEP-GROUP
+# PBS queue (resources.queue overrides this)
+queue: backfill
+# Optional "-l filesystems=..." value (e.g. home:eagle on Polaris)
+filesystems: null
+# torchrun or mpiexec (PALS/MPICH: one rank per GPU)
+launcher: torchrun
+# Sourced at job start (conda activate, module load, ...); null to skip
+setup_script: my_setup.sh
+master_port: 29500
+# Extra environment variables exported into the job.
+# These are Polaris (Slingshot) NCCL/libfabric settings.
+env:
+  NCCL_NET_GDR_LEVEL: 0
+  NCCL_CROSS_NIC: 1
+  NCCL_COLLNET_ENABLE: 1
+  FI_CXI_DISABLE_HOST_REGISTER: 1
+  FI_MR_CACHE_MONITOR: userfaultfd
+  FI_CXI_DEFAULT_CQ_SIZE: 131072
+  TMPDIR: /tmp
+# Raw extra qsub arguments
+extra_args: []

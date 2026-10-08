@@ -1,0 +1,24 @@
+# @package cluster
+#
+# Swing (migrated from the old configs/pbs/swing.yaml profile).
+# That profile did not request CPUs or memory; to match, submit with
+#   resources.cpus_per_node=null resources.mem=null
+
+scheduler: pbs
+account: ATLAS-HEP-group
+queue: backfill
+filesystems: null
+launcher: torchrun
+setup_script: my_setup.sh
+master_port: 29500
+# Previously applied to every PBS job; Polaris/Slingshot-specific and
+# likely removable here.
+env:
+  NCCL_NET_GDR_LEVEL: 0
+  NCCL_CROSS_NIC: 1
+  NCCL_COLLNET_ENABLE: 1
+  FI_CXI_DISABLE_HOST_REGISTER: 1
+  FI_MR_CACHE_MONITOR: userfaultfd
+  FI_CXI_DEFAULT_CQ_SIZE: 131072
+  TMPDIR: /tmp
+extra_args: []

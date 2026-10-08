@@ -1,0 +1,12 @@
+# @package resources
+#
+# Job size. Null fields are not requested from the scheduler.
+
+nnodes: 1
+gpus_per_node: 1
+cpus_per_node: 8
+mem: "32gb"
+walltime: "4:00:00"
+omp_num_threads: 8
+# Queue/partition override (null = use cluster.queue)
+queue: null

@@ -1,88 +1,86 @@
 #!/usr/bin/env python3
 """
-PBS batch submission wrapper for ParticleMan training.
+Batch submission wrapper for ParticleMan training (PBS or Slurm).
 
-Accepts Hydra overrides for both PBS resources (pbs.*) and training
-configuration (data.*, model.*, training.*, etc.).  Training overrides
-are validated against the training config schema before submission and
-then forwarded to the PBS job via HYDRA_ARGS.
+Accepts Hydra overrides for the submit config (cluster=, resources=, job.*)
+and for the training config (data.*, model.*, training.*, etc.). Training
+overrides are validated by composing the training config before submission,
+then forwarded to the job via HYDRA_ARGS. The job runs scripts/jobs/launch.sh.
 
-PBS profiles are selected with the pbs= config group override.
-Individual PBS fields can be overridden with pbs.<field>=<value>.
+The cluster= group picks the site (scheduler, account, queue, launcher,
+environment); resources= picks the job size. Individual fields can be
+overridden with cluster.<field>=<value> / resources.<field>=<value>.
 
 Usage:
-    # Submit with default PBS resources (single GPU)
+    # Submit with defaults (configs/submit_config.yaml: pbs_example, single_gpu)
     python scripts/submit.py data=bbllv08 training.epochs=80
 
     # Use a top-level training config (instead of the default configs/config.yaml)
     python scripts/submit.py --config-name bbllv08
 
-    # Use a different PBS resource profile
-    python scripts/submit.py pbs=multi_gpu data=bbllv08 model.d_model=256
+    # Slurm site, 8 GPUs on one node
+    python scripts/submit.py cluster=slurm_example resources=multi_gpu data=bbllv08
 
     # Multi-node run
-    python scripts/submit.py pbs=multi_node data=bbllv08 training.epochs=200
+    python scripts/submit.py resources=multi_node data=bbllv08 training.epochs=200
 
-    # Override individual PBS settings
-    python scripts/submit.py pbs=multi_gpu pbs.walltime=16:00:00 data=bbllv08
+    # Override individual settings
+    python scripts/submit.py resources=multi_gpu resources.walltime=16:00:00 \\
+        cluster.launcher=mpiexec job.name=bbll_test data=bbllv08
 
-    # Override the PBS job name
-    python scripts/submit.py pbs.job_name=bbll_test data=bbllv08 training=quick_test
+    # Dry run: print the submit command and job environment without submitting
+    python scripts/submit.py --dry-run resources=multi_gpu data=bbllv08
 
-    # Dry run: print the qsub command without submitting
-    python scripts/submit.py --dry-run pbs=multi_gpu data=bbllv08 training.epochs=80
-
-PBS profiles live in configs/pbs/<name>.yaml.
+Cluster configs live in configs/cluster/, job sizes in configs/resources/.
 """
 
 import argparse
+import os
+import shlex
 import subprocess
-import shutil
 import sys
 import time
-from collections import defaultdict
 from pathlib import Path
+from typing import Dict, List, Tuple
 
-from hydra import initialize_config_dir, compose
-from hydra.core.global_hydra import GlobalHydra
+REPO_ROOT = Path(__file__).resolve().parent.parent
+src_path = REPO_ROOT / "src"
+if src_path.exists():
+    sys.path.insert(0, str(src_path))
+
+from hydra import compose, initialize_config_dir
 from hydra.core.config_store import ConfigStore
-from omegaconf import OmegaConf
+from hydra.core.global_hydra import GlobalHydra
+from omegaconf import DictConfig, OmegaConf
+
+from particleman.config import TrainConfig
+from particleman.scheduling import build_job_env, check_launcher, get_scheduler
 from particleman.training import OutputManager
 
-REPO_ROOT = Path(__file__).parent.parent
 CONFIG_DIR = REPO_ROOT / "configs"
-PBS_SCRIPT = REPO_ROOT / "scripts" / "pbs" / "submit_training.pbs"
+JOB_SCRIPT = REPO_ROOT / "scripts" / "jobs" / "launch.sh"
+TRAIN_SCRIPT = REPO_ROOT / "scripts" / "train.py"
 
-# Prefixes that belong to the submit (PBS) config rather than the training config
-config_types = ["pbs"]
-PBS_SUBMIT_PREFIXES = ("pbs=", "pbs.", "+pbs", "~pbs", "++pbs")
+# Top-level keys that belong to the submit config rather than the training config
+SUBMIT_KEYS = ("cluster", "resources", "job")
 
 
-def split_overrides(args: list[str]) -> tuple[list[str], list[str]]:
-    """Separate PBS-level overrides from training overrides."""
-    split_configs = defaultdict(list)
+def split_overrides(args: List[str]) -> Tuple[List[str], List[str]]:
+    """Separate submit-config overrides from training overrides."""
+    submit, train = [], []
     for arg in args:
-        for config_type in config_types:
-            submit_prefixes = (f"{config_type}=", f"{config_type}.", f"+{config_type}", f"~{config_type}", f"++{config_type}")
-            if any(arg.startswith(p) for p in submit_prefixes):
-                split_configs[config_type].append(arg)
-        if not any(arg.startswith(p) for p in PBS_SUBMIT_PREFIXES):
-            split_configs["train"].append(arg)
-    return split_configs
+        key = arg.lstrip("+~").split("=", 1)[0].split(".", 1)[0]
+        (submit if key in SUBMIT_KEYS else train).append(arg)
+    return submit, train
 
 
-def compose_submit_config(submit_overrides: list[str]):
+def compose_submit_config(submit_overrides: List[str]) -> DictConfig:
     GlobalHydra.instance().clear()
     with initialize_config_dir(config_dir=str(CONFIG_DIR), version_base=None):
         return compose(config_name="submit_config", overrides=submit_overrides)
 
 
-def compose_train_config(train_overrides: list[str], config_name: str = "config"):
-    # Register TrainConfig so Hydra validates against the structured schema
-    src_path = REPO_ROOT / "src"
-    if src_path.exists() and str(src_path) not in sys.path:
-        sys.path.insert(0, str(src_path))
-    from particleman.config import TrainConfig
+def compose_train_config(train_overrides: List[str], config_name: str = "config") -> DictConfig:
     cs = ConfigStore.instance()
     cs.store(name="config_schema", node=TrainConfig)
 
@@ -91,58 +89,13 @@ def compose_train_config(train_overrides: list[str], config_name: str = "config"
         return compose(config_name=config_name, overrides=train_overrides)
 
 
-def build_select_string(pbs) -> str:
-    out = ""
-    if pbs.get("nnodes", None):
-        out += f"select={pbs.nnodes}:"
-    if pbs.get("ncpus", None):
-        out += f"ncpus={pbs.ncpus}:"
-    if pbs.get("ngpus", None):
-        out += f"ngpus={pbs.ngpus}:"
-    if pbs.get("mem", None):
-        out += f"mem={pbs.mem}:"
-    out = out[:-1]
-    return out
+def format_env(env: Dict[str, str]) -> str:
+    return "\n".join(f"{k}={shlex.quote(v)}" for k, v in env.items())
 
 
-def build_filesystems_string(pbs) -> str:
-    out = ""
-    if pbs.get("filesystems", None):
-        out = f"-l filesystems={pbs.filesystems}"
-    return out
-
-
-def build_qsub_command(pbs, train_overrides: list[str], config_name: str = "config") -> list[str]:
-    cn_prefix = [f"--config-name {config_name}"] if config_name != "config" else []
-    hydra_args_str = " ".join(cn_prefix + train_overrides)
-
-    v_vars = ",".join([
-        f"HYDRA_ARGS=\"{hydra_args_str}\"",
-        f"NGPUS_PER_NODE={pbs.ngpus}",
-        f"WORLD_SIZE={pbs.ngpus*pbs.nnodes}",
-        f"MASTER_PORT={pbs.master_port}",
-        f"OMP_NUM_THREADS={pbs.omp_num_threads}",
-        f"NCCL_DEBUG={pbs.nccl_debug}",
-        f"LAUNCHER={pbs.launcher}",
-    ])
-
-    return [
-        "qsub",
-        "-A", pbs.account,
-        "-N", pbs.job_name,
-        "-q", pbs.queue,
-        "-l", f"walltime={pbs.walltime}",
-        "-l", build_select_string(pbs),
-        build_filesystems_string(pbs),
-        "-j", "oe",
-        "-v", v_vars,
-        str(PBS_SCRIPT),
-    ]
-
-
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Submit a ParticleMan training job to PBS.",
+        description="Submit a ParticleMan training job to PBS or Slurm.",
         add_help=False,
     )
     parser.add_argument(
@@ -154,7 +107,7 @@ def main():
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Print the qsub command without submitting",
+        help="Print the submit command and job environment without submitting",
     )
     parser.add_argument(
         "-h", "--help",
@@ -167,33 +120,30 @@ def main():
     if args.help:
         parser.print_help()
         print("\nAll other arguments are Hydra overrides, for example:")
-        print("  pbs=multi_gpu              Select a PBS resource profile")
-        print("  pbs.walltime=8:00:00       Override a single PBS field")
-        print("  pbs.job_name=my_run        Override the PBS job name")
+        print("  cluster=slurm_example      Select a site (configs/cluster/)")
+        print("  resources=multi_gpu        Select a job size (configs/resources/)")
+        print("  resources.walltime=8:00:00 Override a single resource field")
+        print("  cluster.launcher=mpiexec   Override the launcher")
+        print("  job.name=my_run            Override the job name")
         print("  data=bbllv08               Training config group override")
         print("  training.epochs=80         Training field override")
-        print("\nPBS profiles: configs/pbs/<name>.yaml")
-        print("Training configs: configs/<name>.yaml  (selected with --config-name/-cn)")
+        print("\nTraining configs: configs/<name>.yaml  (selected with --config-name/-cn)")
         sys.exit(0)
 
-    override_dict = split_overrides(remaining)
-    submit_overrides = override_dict["pbs"]
-    train_overrides = override_dict["train"]
+    submit_overrides, train_overrides = split_overrides(remaining)
 
-    # Compose and validate PBS config via Hydra
-    submit_cfg = compose_submit_config(submit_overrides)
-    pbs = submit_cfg.pbs
+    submit_cfg = OmegaConf.to_container(compose_submit_config(submit_overrides), resolve=True)
+    cluster, resources, job = submit_cfg["cluster"], submit_cfg["resources"], submit_cfg["job"]
 
-    # Derive the profile name for display (first bare pbs=NAME arg, or "default")
-    pbs_profile = next(
-        (o.split("=", 1)[1] for o in submit_overrides if o.startswith("pbs=") and "." not in o.split("=")[0]),
-        "default",
-    )
+    try:
+        scheduler = get_scheduler(cluster["scheduler"])
+        check_launcher(cluster["scheduler"], cluster["launcher"])
+    except ValueError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
 
-    # Compose and validate training config via Hydra
     print("Validating training config...", flush=True)
     train_config = compose_train_config(train_overrides, config_name=args.config_name)
-    print(train_config)
 
     # Set a timestamp value to coordinate logging with submission
     timestamp_element = train_config.output.get("timestamp", None)
@@ -203,35 +153,61 @@ def main():
     else:
         timestamp = str(timestamp_element)
 
-    cmd = build_qsub_command(pbs, train_overrides, config_name=args.config_name)
-    print(f"Submitting with PBS profile: {pbs_profile}")
-    print(f"  Nodes: {pbs.nnodes}  GPUs/node: {pbs.ngpus}  Walltime: {pbs.walltime}")
-    if train_overrides:
-        print("  Training overrides:", " ".join(train_overrides))
-    else:
-        print("  Training overrides: (none — using default config)")
+    hydra_args = ([f"--config-name={args.config_name}"] if args.config_name != "config" else []) + train_overrides
+    job_env = build_job_env(
+        cluster=cluster,
+        resources=resources,
+        job=job,
+        output=OmegaConf.to_container(train_config.output, resolve=True),
+        repo_root=str(REPO_ROOT),
+        train_script=str(TRAIN_SCRIPT),
+        hydra_args=hydra_args,
+        timestamp=timestamp,
+    )
+    cmd = scheduler.build_submit_command(
+        cluster, resources, job, str(JOB_SCRIPT), list(job_env)
+    )
+
+    print(f"Scheduler: {scheduler.name}  Launcher: {cluster['launcher']}")
+    print(
+        f"  Nodes: {resources['nnodes']}  GPUs/node: {resources['gpus_per_node']}"
+        f"  Walltime: {resources['walltime']}"
+    )
+    print("  Training overrides:", " ".join(train_overrides) or "(none — using default config)")
     print()
-    print("qsub command:")
-    print(" ", " ".join(cmd))
+    print("Submit command:")
+    print(" ", shlex.join(cmd))
+    print()
+    print("Job environment:")
+    print(format_env(job_env))
     print()
 
     if args.dry_run:
         print("Dry run: not submitting.")
         return
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    job_id = result.stdout.strip().split('.')[0]
+    result = subprocess.run(cmd, capture_output=True, text=True, env={**os.environ, **job_env})
+    if result.returncode != 0:
+        print(f"ERROR: submission failed (exit {result.returncode}):", file=sys.stderr)
+        print(result.stderr or result.stdout, file=sys.stderr)
+        sys.exit(result.returncode)
 
-    # Initialization causes directories to be created, not used further
-    output_manager = OutputManager(train_config.output.experiment_name, \
-                                    run_name=f"{timestamp}_pbs{job_id}")
-    
-    job_filename = f"job_{job_id}.pbs"
-    with open(job_filename, "w") as f:
-        f.write(" ".join(cmd))
-    shutil.copy(job_filename, output_manager.run_dir)
+    job_id = scheduler.parse_job_id(result.stdout)
+    print(f"Submitted job {job_id}")
 
-    sys.exit(result.returncode)
+    # Pre-create the run directory the job will use, and record how it was submitted
+    output_manager = OutputManager(
+        train_config.output.experiment_name,
+        run_name=train_config.output.get("run_name") or f"{timestamp}_{scheduler.name}{job_id}",
+        base_dir=train_config.output.get("output_dir") or "outputs",
+    )
+    submit_file = output_manager.run_dir / "submit_command.sh"
+    submit_file.write_text(
+        "#!/bin/bash\n# Submitted from " + os.getcwd() + "\n"
+        + "\n".join(f"export {line}" for line in format_env(job_env).splitlines())
+        + "\n" + shlex.join(cmd) + "\n"
+    )
+    print(f"Run directory: {output_manager.run_dir}")
 
 
 if __name__ == "__main__":
