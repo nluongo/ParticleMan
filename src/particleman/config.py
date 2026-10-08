@@ -76,9 +76,9 @@ class DataSourceConfig:
     collections: Dict[str, Any] = field(default_factory=dict)
     particle_id_map: Dict[int, int] = field(default_factory=dict)
     default_particle_id: int = 15
-    # Process label mapping: glob pattern -> integer label
-    file_process_map: Dict[str, int] = field(default_factory=dict)
-    n_process_types: int = 0
+    # Event label mapping: glob pattern on file basename -> integer label
+    file_event_label_map: Dict[str, int] = field(default_factory=dict)
+    n_event_types: int = 0
     preprocessing: PreprocessingConfig = field(default_factory=PreprocessingConfig)
     split: SplitConfig = field(default_factory=SplitConfig)
     # Training-specific override for max events (None = use all)
