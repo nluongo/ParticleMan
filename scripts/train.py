@@ -7,26 +7,26 @@ Configuration is managed via YAML files and command-line overrides.
 
 Usage:
     # Use default config (mc20_ttbar)
-    python scripts/train_mc20.py
+    python scripts/train.py
     
     # Override values via CLI (note: key=value syntax)
-    python scripts/train_mc20.py training.epochs=20 model.d_model=256 model.d_ff=512
+    python scripts/train.py training.epochs=20 model.d_model=256 model.d_ff=512
     
     # Use different sub-configs
-    python scripts/train_mc20.py data=physlite model=default
+    python scripts/train.py data=physlite model=default
     
     # Override data settings
-    python scripts/train_mc20.py data.max_events=5000 data.preprocessing.pt_cut=10.0
+    python scripts/train.py data.max_events=5000 data.preprocessing.pt_cut=10.0
     
     # Print resolved config without running
-    python scripts/train_mc20.py --cfg job
+    python scripts/train.py --cfg job
     
     # Multi-GPU with torchrun
-    torchrun --nproc_per_node=4 scripts/train_mc20.py training.batch_size=64
+    torchrun --nproc_per_node=4 scripts/train.py training.batch_size=64
     
     # Multi-node with torchrun
     torchrun --nnodes=2 --nproc_per_node=4 --node_rank=0 --master_addr=<master_ip> \\
-        scripts/train_mc20.py
+        scripts/train.py
 """
 
 from dataclasses import asdict
