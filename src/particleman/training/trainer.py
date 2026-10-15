@@ -6,10 +6,13 @@ models using masked prediction. Supports both single-GPU and distributed multi-G
 training.
 """
 
+import json
 import logging
+import time
 from contextlib import nullcontext
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 import torch
 from torch.optim import AdamW
@@ -58,6 +61,7 @@ class ParticleTrainer:
         profile_dir: Optional[Path] = None,
         mode: str = 'pretrain',
         pretrained_checkpoint: Optional[Path] = None,
+        timing_path: Optional[Path] = None,
     ) -> None:
         """
         Initialize the trainer.
@@ -85,6 +89,9 @@ class ParticleTrainer:
                 weights only. Optimizer and scheduler are left freshly initialized,
                 making this suitable for both fine-tuning and continued pre-training
                 with a new schedule.
+            timing_path: JSON file for training throughput and timing (start time,
+                elapsed time, per-epoch it/s and samples/s). Rewritten after every
+                epoch on the main process, so it survives interrupted runs.
         """
         if mode not in ('pretrain', 'classify'):
             raise ValueError(f"mode must be 'pretrain' or 'classify', got {mode!r}")
@@ -141,6 +148,10 @@ class ParticleTrainer:
         self.step = 0
         self.epoch = 0
         self.best_val_loss = float('inf')
+
+        # Throughput/timing record (see _record_epoch_timing)
+        self.timing_path = Path(timing_path) if timing_path else None
+        self.timing: Dict[str, Any] = {}
 
         # Profiling
         self.profile = profile
@@ -496,9 +507,83 @@ class ParticleTrainer:
             + prof.key_averages().table(sort_by="cpu_time_total", row_limit=30)
         )
 
+    @staticmethod
+    def _now_iso() -> str:
+        return datetime.now().astimezone().isoformat(timespec="seconds")
+
+    def _write_timing(self) -> None:
+        """Write the timing record to timing_path (main process only)."""
+        if self.is_main and self.timing_path is not None:
+            self.timing_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.timing_path, "w") as f:
+                json.dump(self.timing, f, indent=2)
+
+    def _record_epoch_timing(
+        self,
+        epoch: int,
+        epoch_start: str,
+        n_batches: int,
+        n_samples: int,
+        train_s: float,
+        val_s: float,
+    ) -> None:
+        """
+        Append one epoch's throughput to the timing record and log it.
+
+        it/s matches the tqdm progress bar: training-loop batches per second on
+        this process, including data loading. samples/s is global (summed over
+        processes, assuming equal work per rank).
+        """
+        it_per_sec = n_batches / train_s if train_s > 0 else 0.0
+        samples_per_sec = n_samples * self.world_size / train_s if train_s > 0 else 0.0
+        epochs = self.timing["epochs"]
+        epochs.append({
+            "epoch": epoch + 1,
+            "start_time": epoch_start,
+            "train_s": round(train_s, 3),
+            "val_s": round(val_s, 3),
+            "batches": n_batches,
+            "it_per_sec": round(it_per_sec, 3),
+            "samples_per_sec": round(samples_per_sec, 1),
+        })
+        total_batches = sum(e["batches"] for e in epochs)
+        total_train_s = sum(e["train_s"] for e in epochs)
+        self.timing["mean_it_per_sec"] = (
+            round(total_batches / total_train_s, 3) if total_train_s > 0 else 0.0
+        )
+        self.timing["elapsed_s"] = round(time.time() - self._train_start, 3)
+        self._write_timing()
+
+        if self.is_main:
+            logger.info(
+                f"Epoch {epoch+1} - {it_per_sec:.2f} it/s, "
+                f"{samples_per_sec:.1f} samples/s, train {train_s:.1f}s, val {val_s:.1f}s"
+            )
+            self.experiment_logger.log_metrics(
+                {
+                    "train_it_per_sec": it_per_sec,
+                    "train_samples_per_sec": samples_per_sec,
+                    "epoch_train_s": train_s,
+                    "epoch_val_s": val_s,
+                },
+                step=self.step,
+            )
+
     def train(self) -> None:
         """Train the model for the number of epochs specified in the constructor."""
         num_epochs = self.num_epochs
+
+        self._train_start = time.time()
+        self.timing = {
+            "start_time": self._now_iso(),
+            "end_time": None,
+            "elapsed_s": 0.0,
+            "world_size": self.world_size,
+            "initial_eval_s": None,
+            "mean_it_per_sec": None,
+            "epochs": [],
+        }
+        self._write_timing()
 
         if self.is_main:
             logger.info(f"Starting training for {num_epochs} epochs")
@@ -524,6 +609,9 @@ class ParticleTrainer:
             logger.info(f"Epoch 0 - Initial Validation Loss: {init_val_losses['total_loss']:.4f}")
             self.experiment_logger.log_metrics({f"val_{k}": v for k, v in init_val_losses.items()}, step=self.step)
 
+        self.timing["initial_eval_s"] = round(time.time() - self._train_start, 3)
+        self._write_timing()
+
         prof_ctx = self._create_profiler() if self.profile else nullcontext()
 
         with prof_ctx as prof:
@@ -544,7 +632,14 @@ class ParticleTrainer:
 
                 self.optimizer.zero_grad()
 
+                epoch_start = self._now_iso()
+                epoch_t0 = time.time()
+                n_batches = 0
+                n_samples = 0
+
                 for batch_idx, batch in enumerate(pbar):
+                    n_batches += 1
+                    n_samples += batch['pt'].shape[0]
                     losses = self.train_step(batch)
 
                     # Skip if batch was skipped (empty mask)
@@ -581,12 +676,19 @@ class ParticleTrainer:
                     if prof is not None:
                         prof.step()
 
+                train_s = time.time() - epoch_t0
+
                 # Synchronize before validation (if distributed)
                 if self.is_distributed:
                     sync_across_processes()
 
                 # Validation
+                val_t0 = time.time()
                 val_losses = self.validate()
+                val_s = time.time() - val_t0
+                self._record_epoch_timing(
+                    epoch, epoch_start, n_batches, n_samples, train_s, val_s
+                )
                 if val_losses and self.is_main:
                     val_loss = val_losses['total_loss']
                     logger.info(f"Epoch {epoch+1} - Val Loss: {val_loss:.4f}")
@@ -608,6 +710,13 @@ class ParticleTrainer:
         if self.profile:
             self._report_profile(prof)
 
+        self.timing["end_time"] = self._now_iso()
+        self.timing["elapsed_s"] = round(time.time() - self._train_start, 3)
+        self._write_timing()
+
         if self.is_main:
-            logger.info("Training completed!")
+            logger.info(
+                f"Training completed in {self.timing['elapsed_s']:.1f}s "
+                f"(mean {self.timing['mean_it_per_sec'] or 0:.2f} it/s)"
+            )
         self.save_checkpoint("final_model.pt")

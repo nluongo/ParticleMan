@@ -334,6 +334,7 @@ def main(cfg: TrainConfig) -> None:
         profile_dir=profile_dir,
         pretrained_checkpoint=Path(cfg.training.pretrained_checkpoint) if cfg.training.pretrained_checkpoint else None,
         mode=cfg.training.mode,
+        timing_path=output.run_dir / "timing.json" if output else None,
     )
     
     if is_main_process(rank):
@@ -388,7 +389,7 @@ def main(cfg: TrainConfig) -> None:
         test_experiment_logger.close()
         
         # Save summary
-        output.save_summary(test_losses)
+        output.save_summary(test_losses, timing=trainer.timing)
         
         logger.info("\n" + "=" * 70)
         logger.info("Training complete!")

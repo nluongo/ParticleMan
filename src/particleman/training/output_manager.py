@@ -8,6 +8,7 @@ Creates a unified directory structure:
     ├── config.json        # Training configuration
     ├── job_info.json      # PBS/SLURM job info (if applicable)
     ├── output.log         # Training log
+    ├── timing.json        # Start/elapsed time and per-epoch it/s (updated each epoch)
     └── summary.json       # Final metrics
 """
 
@@ -207,22 +208,31 @@ class OutputManager:
         logger.info(f"Saved job info to {filepath}")
         return filepath
     
-    def save_summary(self, metrics: Dict[str, Any]) -> Path:
+    def save_summary(
+        self, metrics: Dict[str, Any], timing: Optional[Dict[str, Any]] = None
+    ) -> Path:
         """
         Save training summary/results.
         
         Args:
             metrics: Final training metrics to save.
+            timing: Training timing record (ParticleTrainer.timing); its start
+                time, elapsed time and mean it/s are copied into the summary.
         
         Returns:
             Path to the saved summary file.
         """
-        summary = {
+        summary: Dict[str, Any] = {
             "experiment_name": self.experiment_name,
             "run_name": self.run_name,
             "completed_at": datetime.now().isoformat(),
             "metrics": metrics,
         }
+        if timing:
+            summary["training_start_time"] = timing.get("start_time")
+            summary["training_end_time"] = timing.get("end_time")
+            summary["training_elapsed_s"] = timing.get("elapsed_s")
+            summary["mean_it_per_sec"] = timing.get("mean_it_per_sec")
         
         filepath = self.run_dir / "summary.json"
         with open(filepath, "w") as f:
