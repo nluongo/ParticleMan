@@ -28,6 +28,8 @@ try:
         TrainingConfig,
         OutputConfig,
         DistributedConfig,
+        ClusterConfig,
+        ResourceConfig,
     )
     
     __all__ = [
@@ -49,6 +51,8 @@ try:
         "TrainingConfig",
         "OutputConfig",
         "DistributedConfig",
+        "ClusterConfig",
+        "ResourceConfig",
     ]
 except ImportError:
     # Dependencies not available (e.g., during installation)

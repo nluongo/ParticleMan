@@ -25,7 +25,7 @@ Usage:
     torchrun --nproc_per_node=4 scripts/train.py training.batch_size=64
     
     # Multi-node with torchrun
-    torchrun --nnodes=2 --nproc_per_node=4 --node_rank=0 --master_addr=<master_ip> \\
+    torchrun --nnodes=2 --nproc_per_node=4 --node_rank=0 --master_addr=<master_ip>
         scripts/train.py
 """
 
@@ -46,7 +46,7 @@ if src_path.exists():
 
 import torch
 
-from particleman.config import TrainConfig
+from particleman.config import TrainConfig, register_configs
 from particleman.data import create_dataloaders, create_datasets
 from particleman.models import ParticleTransformer, AttentionBiasTransformer, ParticleConfig, EmbeddingType, PhiEncoding
 from particleman.training import (
@@ -69,12 +69,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Register structured configs with Hydra
-cs = ConfigStore.instance()
-cs.store(name="config_schema", node=TrainConfig)
+register_configs()
 
-
-@hydra.main(version_base=None, config_path="../configs", config_name="config")
+@hydra.main(version_base=None, config_path="../configs", config_name="config_schema")
 def main(cfg: TrainConfig) -> None:
     """Main training function."""
     # Setup distributed environment (returns rank=0, world_size=1 for single GPU)
