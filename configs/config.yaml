@@ -1,5 +1,5 @@
 defaults:
-  - _self_
+  - base_config
   - data: default.yaml
   - model: default.yaml
   - training: default.yaml
@@ -7,3 +7,4 @@ defaults:
   - distributed: default.yaml
   - cluster: slurm_example.yaml
   - resources: default.yaml
+  - _self_

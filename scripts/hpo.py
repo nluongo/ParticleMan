@@ -41,10 +41,9 @@ if src_path.exists():
     sys.path.insert(0, str(src_path))
 
 import hydra
-from hydra.core.config_store import ConfigStore
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, OmegaConf
 
-from particleman.config import TrainConfig
+from particleman.config import register_configs
 from particleman.data import create_dataloaders, create_datasets
 from particleman.models import (
     AttentionBiasTransformer,
@@ -68,6 +67,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+register_configs()
 
 
 def load_data_config(data_config_name: str) -> dict:
@@ -268,7 +269,7 @@ def build_objective(cfg: dict):
 #            print(trial.user_attrs.get("params_d_model", 0))
 
 @hydra.main(version_base=None, config_path="../configs", config_name="config")
-def main(cfg: TrainConfig) -> None:
+def main(cfg: DictConfig) -> None:
     #parser = argparse.ArgumentParser(description="ParticleMan HPO with Optuna")
     #parser.add_argument("--data-config", default="default", help="Data config name (without .yaml)")
     #parser.add_argument("--epochs", type=int, default=5, help="Epochs per trial")

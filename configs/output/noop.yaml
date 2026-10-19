@@ -3,6 +3,10 @@
 # Default output and logging configuration for ParticleMan
 
 # Base directory for all outputs (checkpoints, logs, etc.)
+defaults:
+  - base_output
+  - _self_
+
 output_dir: outputs
 
 # Experiment name (groups related runs)

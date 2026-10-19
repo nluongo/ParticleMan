@@ -33,14 +33,13 @@ from pathlib import Path
 import hydra
 import numpy as np
 import torch
-from hydra.core.config_store import ConfigStore
 from omegaconf import DictConfig, OmegaConf
 
 src_path = Path(__file__).parent.parent / "src"
 if src_path.exists():
     sys.path.insert(0, str(src_path))
 
-from particleman.config import TrainConfig
+from particleman.config import register_configs
 from particleman.data import create_dataloaders
 from particleman.models import (
     AttentionBiasTransformer,
@@ -56,8 +55,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-cs = ConfigStore.instance()
-cs.store(name="config_schema", node=TrainConfig)
+register_configs()
 
 
 def _denormalize(pred_pt, pred_eta, pred_phi, model_config: ParticleConfig):

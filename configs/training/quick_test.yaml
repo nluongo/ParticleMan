@@ -6,6 +6,10 @@
 # Usage:
 #   python scripts/train.py training=quick_test
 
+defaults:
+  - base_training
+  - _self_
+
 epochs: 2
 batch_size: 64
 lr: 1.0e-4

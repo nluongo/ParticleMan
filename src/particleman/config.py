@@ -1,14 +1,23 @@
-"""Hydra structured configs for ParticleMan training.
+"""Hydra structured config schemas for ParticleMan.
 
-This module defines dataclasses for Hydra configuration. The data source
-configuration (collections, preprocessing, etc.) is loaded via Hydra's
-config composition from configs/data/*.yaml files.
+The dataclasses here are schemas: they define which keys exist and their
+types. The values come from the YAML files in configs/. ``register_configs``
+stores each group schema as ``base_<group>`` (and the root as
+``base_config``). Each YAML file puts its schema first in its defaults list,
+so Hydra merges the YAML onto the dataclass and rejects unknown keys or
+wrong types. The composition order is: schema, group YAML, root YAML, CLI.
+
+When you add a config key, add it to both the YAML and the dataclass.
 """
 
+import glob
+import pathlib
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
+
 from hydra.core.config_store import ConfigStore
+from hydra.utils import to_absolute_path
 from omegaconf import OmegaConf
 
 
@@ -178,6 +187,7 @@ class OutputConfig:
 class Launcher(str, Enum):
     srun = "srun"
     torchrun = "torchrun"
+    mpiexec = "mpiexec"
 
     @classmethod
     def _missing_(cls, value):
@@ -197,7 +207,9 @@ class ClusterConfig:
     # Slurm partition (resources.queue overrides this)
     queue: str = "gpu"
     qos: Optional[str] = None
-    # torchrun or srun (one task per GPU)
+    # PBS "-l filesystems=..." value (e.g. home:eagle on Polaris); null to skip
+    filesystems: Optional[str] = None
+    # torchrun, srun (Slurm, one task per GPU) or mpiexec (PBS)
     launcher: Launcher = Launcher.srun
     # Sourced at job start (conda activate, module load, ...); null to skip
     setup_script: Optional[str] = None
@@ -209,12 +221,12 @@ class ClusterConfig:
 
 
 # =============================================================================
-# Resource Configuration
+# Resources Configuration
 # =============================================================================
 
 @dataclass
-class ResourceConfig:
-    """Resource configuration."""
+class ResourcesConfig:
+    """Resources configuration."""
 
     nnodes: int = 1
     gpus_per_node: int = 1
@@ -245,28 +257,18 @@ class DistributedConfig:
 
 @dataclass
 class TrainConfig:
-    """Root configuration combining all sub-configs.
-    
-    The 'data' section is loaded from configs/data/*.yaml via Hydra's
-    defaults system, ensuring consistent configuration loading.
-    """
+    """Root schema combining all group schemas.
 
-    defaults: List[Any] = field(default_factory=lambda: [
-        "_self_",
-        {"data": "DataSourceConfig"},
-        {"model": "ModelConfig"},
-        {"training": "TrainingConfig"},
-        {"output": "OutputConfig"},
-        {"cluster": "ClusterConfig"},
-        {"resource": "ResourceConfig"},
-    ])
+    Root YAML files (configs/config.yaml, bbllv08.yaml, ...) list
+    ``base_config`` first in their defaults list to pick it up.
+    """
 
     data: DataSourceConfig = field(default_factory=DataSourceConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     cluster: ClusterConfig = field(default_factory=ClusterConfig)
-    resource: ResourceConfig = field(default_factory=ResourceConfig)
+    resources: ResourcesConfig = field(default_factory=ResourcesConfig)
     distributed: DistributedConfig = field(default_factory=DistributedConfig)
 
 def glob_directory(dir_path: str) -> list:
@@ -274,13 +276,20 @@ def glob_directory(dir_path: str) -> list:
     # This gathers all files in the directory. Alter the string to '*.csv' if needed.
     return [str(p) for p in path.glob('*') if p.is_file()]
 
-def register_configs():
+def register_configs() -> None:
+    """Store the schemas in Hydra's ConfigStore.
+
+    Call this before composing any config (before ``@hydra.main`` runs or
+    ``compose()`` is called). The YAML files reference these names in their
+    defaults lists.
+    """
     cs = ConfigStore.instance()
-    cs.store(name="config_schema", node=TrainConfig)
-    cs.store(group="data", name="DataSourceConfig", node=DataSourceConfig)
-    cs.store(group="model", name="ModelConfig", node=ModelConfig)
-    cs.store(group="training", name="TrainingConfig", node=TrainingConfig)
-    cs.store(group="output", name="OutputConfig", node=OutputConfig)
-    cs.store(group="cluster", name="ClusterConfig", node=ClusterConfig)
-    cs.store(group="resource", name="ResourceConfig", node=ResourceConfig)
-    cs.store(group="distributed", name="DistributedConfig", node=DistributedConfig)
+    cs.store(name="base_config", node=TrainConfig)
+    cs.store(group="data", name="base_data", node=DataSourceConfig)
+    cs.store(group="model", name="base_model", node=ModelConfig)
+    cs.store(group="training", name="base_training", node=TrainingConfig)
+    cs.store(group="output", name="base_output", node=OutputConfig)
+    cs.store(group="cluster", name="base_cluster", node=ClusterConfig)
+    cs.store(group="resources", name="base_resources", node=ResourcesConfig)
+    cs.store(group="distributed", name="base_distributed", node=DistributedConfig)
+

@@ -1,7 +1,12 @@
+# @package data
 # Configuration for ATLAS PHYSLITE flat ntuples
 #
 # This configuration is designed for DAOD_PHYSLITE derived data format
 # commonly used in ATLAS physics analyses.
+
+defaults:
+  - base_data
+  - _self_
 
 source:
   type: "root"

@@ -1,3 +1,4 @@
+# @package data
 # Configuration for preprocessed HDF5 files
 #
 # This configuration is for HDF5 files that have already been converted
@@ -9,6 +10,10 @@
 #   - phi: (n_events, max_particles) float32
 #   - particle_id: (n_events, max_particles) int32
 #   - is_truth: (n_events, max_particles) bool (optional)
+
+defaults:
+  - base_data
+  - _self_
 
 source:
   type: "hdf5"

@@ -4,6 +4,10 @@
 # That profile did not request CPUs or memory; to match, submit with
 #   resources.cpus_per_node=null resources.mem=null
 
+defaults:
+  - base_cluster
+  - _self_
+
 scheduler: pbs
 account: ATLAS-HEP-group
 queue: backfill

@@ -12,6 +12,7 @@
 #   python scripts/train.py --config-name=bbllv08 model=default
 
 defaults:
+  - base_config
   - data: bbllv08
   - model: joint_sincos
   - training: default

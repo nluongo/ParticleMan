@@ -2,6 +2,10 @@
 #
 # Example PBS Pro site. Copy and edit for your cluster.
 
+defaults:
+  - base_cluster
+  - _self_
+
 scheduler: pbs
 account: ATLAS-HEP-GROUP
 # PBS queue (resources.queue overrides this)

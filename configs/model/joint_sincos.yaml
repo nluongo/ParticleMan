@@ -3,6 +3,10 @@
 # Model architecture for joint embedding and sincos phi encoding
 
 # Embedding type: "joint" (Particle Transformer style) or "concat"
+defaults:
+  - base_model
+  - _self_
+
 embedding: joint
 # Phi encoding: "raw" (normalized) or "sincos" (sin/cos components)
 phi_encoding: sincos

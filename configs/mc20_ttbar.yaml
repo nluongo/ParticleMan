@@ -12,6 +12,7 @@
 #   python scripts/train.py --config-name=mc20_ttbar model=default
 
 defaults:
+  - base_config
   - data: mc20_ttbar
   - model: joint_sincos
   - training: default

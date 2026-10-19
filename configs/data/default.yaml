@@ -1,3 +1,4 @@
+# @package data
 # Default data configuration template for ParticleMan
 
 #
@@ -5,6 +6,10 @@
 # Copy this file and modify for your specific dataset.
 
 # Maximum events to load (null for all events)
+defaults:
+  - base_data
+  - _self_
+
 max_events: 10000
 
 # Data source configuration

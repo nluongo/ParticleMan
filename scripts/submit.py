@@ -49,13 +49,14 @@ if src_path.exists():
     sys.path.insert(0, str(src_path))
 
 from hydra import compose, initialize_config_dir
-from hydra.core.config_store import ConfigStore
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import DictConfig, OmegaConf
 
-from particleman.config import TrainConfig
+from particleman.config import register_configs
 from particleman.scheduling import build_job_env, check_launcher, get_scheduler
 from particleman.training import OutputManager
+
+register_configs()
 
 CONFIG_DIR = REPO_ROOT / "configs"
 JOB_SCRIPT = REPO_ROOT / "scripts" / "jobs" / "launch.sh"
@@ -81,9 +82,6 @@ def compose_submit_config(submit_overrides: List[str]) -> DictConfig:
 
 
 def compose_train_config(train_overrides: List[str], config_name: str = "config") -> DictConfig:
-    cs = ConfigStore.instance()
-    cs.store(name="config_schema", node=TrainConfig)
-
     GlobalHydra.instance().clear()
     with initialize_config_dir(config_dir=str(CONFIG_DIR), version_base=None):
         return compose(config_name=config_name, overrides=train_overrides)
@@ -132,7 +130,9 @@ def main() -> None:
 
     submit_overrides, train_overrides = split_overrides(remaining)
 
-    submit_cfg = OmegaConf.to_container(compose_submit_config(submit_overrides), resolve=True)
+    submit_cfg = OmegaConf.to_container(
+        compose_submit_config(submit_overrides), resolve=True, enum_to_str=True
+    )
     cluster, resources, job = submit_cfg["cluster"], submit_cfg["resources"], submit_cfg["job"]
 
     try:

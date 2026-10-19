@@ -3,6 +3,10 @@
 # Default training hyperparameters for ParticleMan
 
 # Number of training epochs
+defaults:
+  - base_training
+  - _self_
+
 epochs: 10
 # Batch size per GPU
 batch_size: 32

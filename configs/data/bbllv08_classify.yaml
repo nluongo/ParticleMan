@@ -11,6 +11,10 @@
 #   - Pre-selected analysis objects (as scalars, e.g., bbll_Lepton1_*)
 
 # Maximum events to load (null for all events)
+defaults:
+  - base_data
+  - _self_
+
 max_events: 10000
 
 source:

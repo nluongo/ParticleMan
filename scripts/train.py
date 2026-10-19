@@ -36,8 +36,7 @@ import sys
 from pathlib import Path
 
 import hydra
-from hydra.core.config_store import ConfigStore
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, OmegaConf
 
 # Add src to path if needed
 src_path = Path(__file__).parent.parent / "src"
@@ -46,7 +45,7 @@ if src_path.exists():
 
 import torch
 
-from particleman.config import TrainConfig, register_configs
+from particleman.config import register_configs
 from particleman.data import create_dataloaders, create_datasets
 from particleman.models import ParticleTransformer, AttentionBiasTransformer, ParticleConfig, EmbeddingType, PhiEncoding
 from particleman.training import (
@@ -71,8 +70,8 @@ logger = logging.getLogger(__name__)
 
 register_configs()
 
-@hydra.main(version_base=None, config_path="../configs", config_name="config_schema")
-def main(cfg: TrainConfig) -> None:
+@hydra.main(version_base=None, config_path="../configs", config_name="config")
+def main(cfg: DictConfig) -> None:
     """Main training function."""
     # Setup distributed environment (returns rank=0, world_size=1 for single GPU)
     rank, world_size, device = setup_distributed(

@@ -3,6 +3,10 @@
 # Default distributed training configuration for ParticleMan
 
 # Backend: "nccl" (GPU, recommended) or "gloo" (CPU)
+defaults:
+  - base_distributed
+  - _self_
+
 backend: nccl
 # Process group initialization timeout in seconds (raise for large multi-node jobs)
 timeout_s: 60

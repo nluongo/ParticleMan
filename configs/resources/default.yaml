@@ -2,6 +2,10 @@
 #
 # Job size. Null fields are not requested from the scheduler.
 
+defaults:
+  - base_resources
+  - _self_
+
 nnodes: 1
 gpus_per_node: 1
 cpus_per_node: 8

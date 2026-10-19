@@ -2,6 +2,10 @@
 #
 # Example Slurm site. Copy and edit for your cluster.
 
+defaults:
+  - base_cluster
+  - _self_
+
 scheduler: slurm
 account: my-account
 # Slurm partition (resources.queue overrides this)
