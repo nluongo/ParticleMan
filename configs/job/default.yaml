@@ -1,0 +1,19 @@
+# @package job
+#
+# How scripts/run.py runs the job, plus batch job settings.
+
+defaults:
+  - base_job
+  - _self_
+
+# Scheduler job name (also names the <name>.o<job_id> output file)
+name: particleman_train
+nccl_debug: WARN
+# auto:   submit if cluster.scheduler is set and we're not in an allocation,
+#         launch if in an allocation or using more than one GPU, else train
+# train:  train in this process (scripts/train.py)
+# launch: start workers with scripts/jobs/launch.sh
+# submit: submit a batch job (qsub/sbatch) that runs launch.sh
+mode: auto
+# Submit mode: print the submit command and job environment without submitting
+dry_run: false

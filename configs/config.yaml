@@ -5,6 +5,18 @@ defaults:
   - training: default.yaml
   - output: default.yaml
   - distributed: default.yaml
-  - cluster: slurm_example.yaml
-  - resources: default.yaml
+  - cluster: local
+  - resources: default
+  - job: default
   - _self_
+
+# Hydra configuration
+hydra:
+  run:
+    # Disable Hydra's automatic output directory management
+    # We use OutputManager instead for consistent output structure
+    dir: .
+  output_subdir: null
+  job:
+    # Don't change working directory
+    chdir: false

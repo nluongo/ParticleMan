@@ -1,0 +1,19 @@
+# @package cluster
+#
+# No batch scheduler: train on this machine. Multi-GPU runs start torchrun
+# through scripts/jobs/launch.sh. Select a site (cluster=swing, ...) to submit.
+
+defaults:
+  - base_cluster
+  - _self_
+
+scheduler: none
+account: null
+queue: null
+qos: null
+filesystems: null
+launcher: torchrun
+setup_script: null
+master_port: 29500
+env: {}
+extra_args: []

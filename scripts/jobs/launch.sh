@@ -7,11 +7,13 @@
 # pieces (node list, job ID, per-node/per-GPU process starters) live in
 # scheduler_<name>.sh next to this file; everything else is shared.
 #
-# Batch mode: submitted by scripts/submit.py, which passes all settings as
+# Batch mode: submitted by scripts/run.py, which passes all settings as
 # environment variables (TRAIN_SCRIPT, HYDRA_ARGS, LAUNCHER, GPUS_PER_NODE, ...).
 #
 # Interactive mode: inside an allocation (qsub -I / salloc) or on a GPU
-# workstation, pass the entry point and Hydra overrides as arguments:
+# workstation, scripts/run.py starts this script with the entry point and
+# Hydra overrides as arguments (settings still come from the environment).
+# It can also be run by hand:
 #
 #   bash scripts/jobs/launch.sh scripts/train.py data=bbllv08 training=quick_test
 #   LAUNCHER=srun bash scripts/jobs/launch.sh scripts/train.py ...
@@ -27,7 +29,7 @@
 
 set -o pipefail
 
-# sbatch runs a spooled copy of this script, so prefer REPO_ROOT from submit.py
+# sbatch runs a spooled copy of this script, so prefer REPO_ROOT from run.py
 if [ -z "${REPO_ROOT}" ]; then
     REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 fi
@@ -44,11 +46,11 @@ if [ $# -gt 0 ]; then
     TRAIN_ARGS=("$@")
 elif [ -n "${TRAIN_SCRIPT}" ]; then
     BATCH=1
-    # HYDRA_ARGS is shell-quoted by submit.py (shlex.join)
+    # HYDRA_ARGS is shell-quoted by run.py (shlex.join)
     eval "TRAIN_ARGS=(${HYDRA_ARGS})"
 else
     echo "Usage: $0 <script.py> [hydra overrides...]" >&2
-    echo "  (or set TRAIN_SCRIPT/HYDRA_ARGS, as scripts/submit.py does)" >&2
+    echo "  (or set TRAIN_SCRIPT/HYDRA_ARGS, as scripts/run.py does)" >&2
     exit 1
 fi
 

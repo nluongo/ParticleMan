@@ -1,4 +1,4 @@
-"""Environment contract between scripts/submit.py and scripts/jobs/launch.sh."""
+"""Environment contract between scripts/run.py and scripts/jobs/launch.sh."""
 
 import shlex
 from typing import Any, Dict, Mapping, Optional, Sequence
@@ -19,7 +19,8 @@ def build_job_env(
 
     Args:
         cluster: Site config (launcher, setup_script, master_port, env)
-        resources: Job size config (gpus_per_node, omp_num_threads)
+        resources: Job size config (gpus_per_node, omp_num_threads); a null
+            gpus_per_node leaves GPUS_PER_NODE unset
         job: Job config (name, nccl_debug)
         output: Composed training ``output`` config (output_dir,
             experiment_name, run_name), used to locate the run directory
@@ -36,7 +37,6 @@ def build_job_env(
         "TRAIN_SCRIPT": train_script,
         # shlex-quoted; launch.sh restores the argument list with eval
         "HYDRA_ARGS": shlex.join(hydra_args),
-        "GPUS_PER_NODE": str(resources.get("gpus_per_node") or 1),
         "OMP_NUM_THREADS": str(resources.get("omp_num_threads") or 8),
         "MASTER_PORT": str(cluster.get("master_port") or 29500),
         "LAUNCHER": str(cluster.get("launcher") or "torchrun"),
@@ -46,6 +46,10 @@ def build_job_env(
         "EXPERIMENT_NAME": str(output["experiment_name"]),
         "TIMESTAMP": timestamp,
     }
+    gpus_per_node = resources.get("gpus_per_node")
+    if gpus_per_node is not None:
+        # Unset: launch.sh counts the node's GPUs with nvidia-smi
+        env["GPUS_PER_NODE"] = str(gpus_per_node)
     setup_script: Optional[str] = cluster.get("setup_script")
     if setup_script:
         env["SETUP_SCRIPT"] = str(setup_script)

@@ -233,31 +233,46 @@ The conversion maps PDG particle codes to categorical IDs (0-15):
 
 See `scripts/README.md` for complete documentation.
 
-## Running on a Cluster
+## Running Training
 
-Batch jobs are submitted with `scripts/submit.py`, which supports PBS and Slurm.
+`scripts/run.py` is the single entry point. It composes the Hydra config in
+`configs/` and then trains in this process, starts workers with
+`scripts/jobs/launch.sh`, or submits a batch job, depending on `job.mode`.
+With the default `job.mode=auto`:
+
+- **submit** when `cluster.scheduler` is set (`cluster=<site>`) and you're not
+  already inside a job
+- **launch** inside a job (`qsub -I`, `salloc`, or a batch job) or when the run
+  uses more than one node or GPU
+- **train** otherwise
+
 Site settings (scheduler, account, queue, launcher, setup script) live in
-`configs/cluster/`, and job sizes live in `configs/resources/`:
+`configs/cluster/`, and job sizes live in `configs/resources/`. The default,
+`cluster=local`, has no scheduler.
 
 ```bash
+# Train locally (all GPUs on this machine; one GPU or CPU trains in-process)
+python scripts/run.py data=bbllv08 training=quick_test
+
 # PBS, 2 nodes x 4 GPUs
-python scripts/submit.py cluster=pbs_example resources=multi_node data=bbllv08
+python scripts/run.py cluster=pbs_example resources=multi_node data=bbllv08
 
 # Slurm, 8 GPUs on one node, longer walltime
-python scripts/submit.py cluster=slurm_example resources=multi_gpu \
+python scripts/run.py cluster=slurm_example resources=multi_gpu \
     resources.walltime=16:00:00 data=bbllv08
 
 # Print the submit command and job environment without submitting
-python scripts/submit.py --dry-run cluster=slurm_example resources=multi_node
+python scripts/run.py cluster=slurm_example resources=multi_node job.dry_run=true
+
+# Inside an allocation (qsub -I, salloc): launches on the allocated nodes
+python scripts/run.py cluster=slurm_example data=bbllv08
+
+# Force a mode (train, launch or submit)
+python scripts/run.py job.mode=train data=bbllv08
 ```
 
-For interactive multi-GPU runs, start from inside an allocation (`qsub -I`,
-`salloc`) or on a GPU workstation:
-
-```bash
-bash scripts/jobs/launch.sh scripts/train.py data=bbllv08 training=quick_test
-LAUNCHER=srun bash scripts/jobs/launch.sh scripts/train.py data=bbllv08
-```
+`scripts/train.py` is the barebones trainer that the launched workers run. It
+can also be used directly, e.g. under your own `torchrun` command.
 
 ## Development
 

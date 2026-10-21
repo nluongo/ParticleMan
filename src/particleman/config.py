@@ -11,10 +11,9 @@ When you add a config key, add it to both the YAML and the dataclass.
 """
 
 import glob
-import pathlib
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 from hydra.core.config_store import ConfigStore
 from hydra.utils import to_absolute_path
@@ -26,29 +25,28 @@ from omegaconf import OmegaConf
 # =============================================================================
 
 def resolve_glob(pattern: str) -> List[str]:
-    # Expands patterns like "datasets/*.csv" or "images/img_*.png"
+    """Expand a glob pattern such as ``datasets/*.h5`` (``${glob:...}``)."""
     return glob.glob(pattern)
 
-# Register before the config store handles the schema
-OmegaConf.register_new_resolver("glob", resolve_glob)
 
-def expand_paths(inputs) -> list[str]:
-    # Handle both a single string or a list of items
+def expand_paths(inputs: Union[str, Sequence[str]]) -> List[str]:
+    """Expand paths and glob patterns into a sorted, de-duplicated file list.
+
+    Relative paths are taken from the directory Hydra was started in
+    (``${resolve_paths:...}``).
+    """
     if isinstance(inputs, str):
         inputs = [inputs]
-        
-    resolved_files = []
+    resolved_files: List[str] = []
     for path_item in inputs:
-        # Convert relative paths properly based on the project root
-        abs_pattern = to_absolute_path(str(path_item))
-        # Expand wildcards or leave literal paths as-is
-        matched_files = glob.glob(abs_pattern)
-        resolved_files.extend(matched_files)
-        
-    # Deduplicate and sort the final list
-    return sorted(list(set(resolved_files)))
+        resolved_files.extend(glob.glob(to_absolute_path(str(path_item))))
+    return sorted(set(resolved_files))
 
-OmegaConf.register_new_resolver("resolve_paths", expand_paths)
+
+# Register before the config store handles the schema. replace=True allows
+# this module to be imported more than once (e.g. by tests).
+OmegaConf.register_new_resolver("glob", resolve_glob, replace=True)
+OmegaConf.register_new_resolver("resolve_paths", expand_paths, replace=True)
 
 @dataclass
 class SourceConfig:
@@ -185,32 +183,31 @@ class OutputConfig:
 # =============================================================================
 
 class Launcher(str, Enum):
-    srun = "srun"
+    """How launch.sh starts the training processes.
+
+    The scheduler/launcher pairing is checked by
+    ``particleman.scheduling.check_launcher``.
+    """
+
     torchrun = "torchrun"
+    srun = "srun"
     mpiexec = "mpiexec"
 
-    @classmethod
-    def _missing_(cls, value):
-        # Maps lowercase string inputs back to the uppercase enum keys
-        if isinstance(value, str):
-            for member in cls:
-                if member.name.lower() == value.lower() or member.value.lower() == value.lower():
-                    return member
-        return None
 
 @dataclass
 class ClusterConfig:
     """Cluster configuration."""
 
-    scheduler: str = "slurm"
-    account: str = "nluongo"
-    # Slurm partition (resources.queue overrides this)
-    queue: str = "gpu"
+    # "none" (run locally), "pbs" or "slurm"
+    scheduler: str = "none"
+    account: Optional[str] = None
+    # Queue/partition (resources.queue overrides this)
+    queue: Optional[str] = None
     qos: Optional[str] = None
     # PBS "-l filesystems=..." value (e.g. home:eagle on Polaris); null to skip
     filesystems: Optional[str] = None
     # torchrun, srun (Slurm, one task per GPU) or mpiexec (PBS)
-    launcher: Launcher = Launcher.srun
+    launcher: Launcher = Launcher.torchrun
     # Sourced at job start (conda activate, module load, ...); null to skip
     setup_script: Optional[str] = None
     master_port: int = 29500
@@ -226,16 +223,36 @@ class ClusterConfig:
 
 @dataclass
 class ResourcesConfig:
-    """Resources configuration."""
+    """Resources configuration. Null fields are not requested from the scheduler."""
 
     nnodes: int = 1
-    gpus_per_node: int = 1
-    cpus_per_node: int = 8
-    mem: str = "32gb"
-    walltime: str = "4:00:00"
-    omp_num_threads: int = 8
+    # Null: use the GPUs visible on the node (local runs and launch.sh)
+    gpus_per_node: Optional[int] = 1
+    cpus_per_node: Optional[int] = 8
+    mem: Optional[str] = "32gb"
+    walltime: Optional[str] = "4:00:00"
+    omp_num_threads: Optional[int] = 8
     # Queue/partition override (null = use cluster.queue)
     queue: Optional[str] = None
+
+# =============================================================================
+# Job Configuration
+# =============================================================================
+
+
+@dataclass
+class JobConfig:
+    """How scripts/run.py runs the job, plus batch job settings."""
+
+    # Scheduler job name (also names the <name>.o<job_id> output file)
+    name: str = "particleman_train"
+    nccl_debug: str = "WARN"
+    # "auto", "train" (in this process), "launch" (scripts/jobs/launch.sh)
+    # or "submit" (batch job)
+    mode: str = "auto"
+    # Submit mode: print the submit command and job environment only
+    dry_run: bool = False
+
 
 # =============================================================================
 # Distributed Configuration
@@ -269,12 +286,9 @@ class TrainConfig:
     output: OutputConfig = field(default_factory=OutputConfig)
     cluster: ClusterConfig = field(default_factory=ClusterConfig)
     resources: ResourcesConfig = field(default_factory=ResourcesConfig)
+    job: JobConfig = field(default_factory=JobConfig)
     distributed: DistributedConfig = field(default_factory=DistributedConfig)
 
-def glob_directory(dir_path: str) -> list:
-    path = pathlib.Path(dir_path)
-    # This gathers all files in the directory. Alter the string to '*.csv' if needed.
-    return [str(p) for p in path.glob('*') if p.is_file()]
 
 def register_configs() -> None:
     """Store the schemas in Hydra's ConfigStore.
@@ -291,5 +305,5 @@ def register_configs() -> None:
     cs.store(group="output", name="base_output", node=OutputConfig)
     cs.store(group="cluster", name="base_cluster", node=ClusterConfig)
     cs.store(group="resources", name="base_resources", node=ResourcesConfig)
+    cs.store(group="job", name="base_job", node=JobConfig)
     cs.store(group="distributed", name="base_distributed", node=DistributedConfig)
-

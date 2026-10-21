@@ -3,13 +3,16 @@
 # This is the root configuration that composes all sub-configs.
 #
 # Usage:
-#   python scripts/train.py --config-name=mc20_ttbar
+#   python scripts/run.py --config-name=mc20_ttbar
 #
 # Override any value via CLI:
-#   python scripts/train.py --config-name=mc20_ttbar training.epochs=20
+#   python scripts/run.py --config-name=mc20_ttbar training.epochs=20
 #
 # Switch sub-configs:
-#   python scripts/train.py --config-name=mc20_ttbar model=default
+#   python scripts/run.py --config-name=mc20_ttbar model=default
+#
+# Submit to a site:
+#   python scripts/run.py --config-name=mc20_ttbar cluster=swing resources=multi_gpu
 
 defaults:
   - base_config
@@ -18,6 +21,9 @@ defaults:
   - training: default
   - output: mc20_ttbar
   - distributed: default
+  - cluster: local
+  - resources: default
+  - job: default
   - _self_
 
 # Hydra configuration

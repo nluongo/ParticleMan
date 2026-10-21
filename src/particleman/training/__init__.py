@@ -15,6 +15,7 @@ from .distributed import (
     sync_across_processes,
 )
 from .output_manager import OutputManager
+from .pipeline import build_model_config, run_training
 
 __all__ = [
     "ParticleTrainer",
@@ -26,4 +27,6 @@ __all__ = [
     "reduce_tensor",
     "sync_across_processes",
     "OutputManager",
-] 
+    "build_model_config",
+    "run_training",
+]

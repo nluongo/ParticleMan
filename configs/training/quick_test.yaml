@@ -4,7 +4,7 @@
 # Uses fewer epochs and smaller batches for fast iteration.
 #
 # Usage:
-#   python scripts/train.py training=quick_test
+#   python scripts/run.py training=quick_test
 
 defaults:
   - base_training

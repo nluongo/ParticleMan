@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Type
 
 # Launchers each scheduler can run; torchrun works everywhere.
 LAUNCHERS_BY_SCHEDULER: Dict[str, Sequence[str]] = {
+    "none": ("torchrun",),
     "pbs": ("torchrun", "mpiexec"),
     "slurm": ("torchrun", "srun"),
 }
@@ -187,6 +188,7 @@ def check_launcher(scheduler: str, launcher: str) -> None:
     Raise ValueError if ``launcher`` can't be used under ``scheduler``.
 
     srun only exists under Slurm; the mpiexec launch path targets PBS (PALS/MPICH).
+    Without a scheduler ("none") only torchrun is available.
     """
     allowed = LAUNCHERS_BY_SCHEDULER.get(scheduler, ())
     if launcher not in allowed:
