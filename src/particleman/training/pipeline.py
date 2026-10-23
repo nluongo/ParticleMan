@@ -33,6 +33,19 @@ from particleman.training.trainer import ParticleTrainer
 logger = logging.getLogger(__name__)
 
 
+def tracking_experiment_name(output_cfg: DictConfig, name: str) -> str:
+    """Return the experiment-tracker name, prefixed for MLflow if configured.
+
+    Databricks requires absolute experiment paths (``/Users/<email>/...``), but
+    ``experiment_name`` is also the local output directory, so the prefix is
+    applied only to the name sent to MLflow.
+    """
+    prefix = output_cfg.get("mlflow_experiment_prefix")
+    if output_cfg.get("experiment_logger") == "mlflow" and prefix:
+        return f"{str(prefix).rstrip('/')}/{name}"
+    return name
+
+
 def build_model_config(cfg: DictConfig) -> ParticleConfig:
     """Build the ``ParticleConfig`` from the ``model``/``training``/``data`` configs."""
     embedding_type = (
@@ -239,7 +252,9 @@ def run_training(cfg: DictConfig) -> None:
         )
         train_experiment_logger = create_logger(
             cfg.output.experiment_logger,
-            experiment_name=cfg.output.experiment_name,
+            experiment_name=tracking_experiment_name(
+                cfg.output, cfg.output.experiment_name
+            ),
             run_name=output.run_name,
         )
         train_experiment_logger.log_params(model_config_dict)
@@ -300,7 +315,9 @@ def run_training(cfg: DictConfig) -> None:
     if output is not None:
         test_experiment_logger = create_logger(
             cfg.output.experiment_logger,
-            experiment_name=f"{cfg.output.experiment_name}_test",
+            experiment_name=tracking_experiment_name(
+                cfg.output, f"{cfg.output.experiment_name}_test"
+            ),
             run_name=output.run_name,
         )
         test_experiment_logger.log_params(model_config_dict)

@@ -20,3 +20,5 @@ run_name: null
 log_interval: 1
 # Experiment logger: "mlflow", "comet", "noop"
 experiment_logger: noop
+# MLflow experiment path prefix, e.g. "/Users/<email>" for Databricks (null = none)
+mlflow_experiment_prefix: null

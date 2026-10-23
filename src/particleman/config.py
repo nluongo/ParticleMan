@@ -176,6 +176,7 @@ class OutputConfig:
     run_name: Optional[str] = None
     log_interval: int = 1
     experiment_logger: str = "mlflow"  # "mlflow", "comet", "noop", "none"
+    mlflow_experiment_prefix: Optional[str] = None  # e.g. "/Users/<email>"
 
 
 # =============================================================================
