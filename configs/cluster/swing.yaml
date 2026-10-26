@@ -8,6 +8,7 @@ defaults:
   - base_cluster
   - _self_
 
+machine_name: Swing
 scheduler: pbs
 account: ATLAS-HEP-group
 queue: backfill

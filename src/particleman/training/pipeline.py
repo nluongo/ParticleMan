@@ -112,6 +112,7 @@ def run_training(cfg: DictConfig) -> None:
             timestamp=cfg.output.timestamp,
             run_name=cfg.output.run_name,
             base_dir=cfg.output.output_dir,
+            machine=cfg.cluster.machine_name,
         )
         output.setup_logging()
         # Save job info if running in PBS/SLURM
@@ -259,6 +260,7 @@ def run_training(cfg: DictConfig) -> None:
         )
         train_experiment_logger.log_params(model_config_dict)
         train_experiment_logger.log_params(training_config_dict)
+        train_experiment_logger.log_params({"machine": cfg.cluster.machine_name})
         logger.info("Creating trainer...")
 
     save_dir = output.checkpoint_dir if output else None
@@ -322,6 +324,7 @@ def run_training(cfg: DictConfig) -> None:
         )
         test_experiment_logger.log_params(model_config_dict)
         test_experiment_logger.log_params(training_config_dict)
+        test_experiment_logger.log_params({"machine": cfg.cluster.machine_name})
 
         logger.info("Test Results:")
         logger.info(f"  Total Loss: {test_losses['total_loss']:.4f}")

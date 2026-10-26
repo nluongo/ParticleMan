@@ -199,6 +199,8 @@ class Launcher(str, Enum):
 class ClusterConfig:
     """Cluster configuration."""
 
+    # Machine name recorded with each run (e.g. "Alpha", "EmpireMacbook")
+    machine_name: str = "local"
     # "none" (run locally), "pbs" or "slurm"
     scheduler: str = "none"
     account: Optional[str] = None

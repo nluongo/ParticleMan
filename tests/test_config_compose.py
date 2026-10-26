@@ -58,6 +58,14 @@ def test_default_runs_locally() -> None:
     assert list(cfg.data.source.files) == ["data/particles.h5"]
 
 
+def test_local_machine_name_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PARTICLEMAN_MACHINE", raising=False)
+    assert _compose("config", []).cluster.machine_name == "local"
+    monkeypatch.setenv("PARTICLEMAN_MACHINE", "EmpireMacbook")
+    assert _compose("config", []).cluster.machine_name == "EmpireMacbook"
+    assert _compose("config", ["cluster=swing"]).cluster.machine_name == "Swing"
+
+
 def test_resources_accept_null() -> None:
     cfg = _compose(
         "config",

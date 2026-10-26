@@ -6,6 +6,8 @@ defaults:
   - base_cluster
   - _self_
 
+# Machine name recorded with each run
+machine_name: MyPBSCluster
 scheduler: pbs
 account: ATLAS-HEP-GROUP
 # PBS queue (resources.queue overrides this)

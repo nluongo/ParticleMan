@@ -6,6 +6,8 @@ defaults:
   - base_cluster
   - _self_
 
+# Machine name recorded with each run
+machine_name: MySlurmCluster
 scheduler: slurm
 account: my-account
 # Slurm partition (resources.queue overrides this)

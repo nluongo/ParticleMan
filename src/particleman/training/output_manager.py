@@ -36,6 +36,7 @@ class OutputManager:
         timestamp: Optional[str] = None,
         run_name: Optional[str] = None,
         base_dir: str = "outputs",
+        machine: Optional[str] = None,
     ) -> None:
         """
         Initialize the output manager.
@@ -45,9 +46,11 @@ class OutputManager:
             timestamp: Timestamp portion of run_name
             run_name: Name for this run. If None, auto-generated from timestamp.
             base_dir: Base directory for all outputs.
+            machine: Machine name (cluster.machine_name), recorded in summary.json.
         """
         self.base_dir = Path(base_dir)
         self.experiment_name = experiment_name
+        self.machine = machine
         
         # Generate run name if not provided (timestamp, same as used for MLflow)
         if run_name is None:
@@ -225,6 +228,7 @@ class OutputManager:
         summary: Dict[str, Any] = {
             "experiment_name": self.experiment_name,
             "run_name": self.run_name,
+            "machine": self.machine,
             "completed_at": datetime.now().isoformat(),
             "metrics": metrics,
         }
