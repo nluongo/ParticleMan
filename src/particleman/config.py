@@ -231,6 +231,9 @@ class ResourcesConfig:
     nnodes: int = 1
     # Null: use the GPUs visible on the node (local runs and launch.sh)
     gpus_per_node: Optional[int] = 1
+    # Slurm GPU type (e.g. "rtx_pro_6000_blackwell"); requests
+    # --gres=gpu:<type>:<n> instead of --gpus-per-node=<n>. Null: any GPU
+    gpu_type: Optional[str] = None
     cpus_per_node: Optional[int] = 8
     mem: Optional[str] = "32gb"
     walltime: Optional[str] = "4:00:00"

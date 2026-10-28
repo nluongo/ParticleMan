@@ -8,6 +8,8 @@ defaults:
 
 nnodes: 1
 gpus_per_node: 8
+# Slurm GPU type, e.g. rtx_pro_6000_blackwell (--gres=gpu:<type>:<n>); null: any
+gpu_type: null
 cpus_per_node: 32
 mem: "128gb"
 walltime: "8:00:00"

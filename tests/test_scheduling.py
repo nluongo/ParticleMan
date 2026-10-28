@@ -139,6 +139,15 @@ def test_slurm_command_multi_node() -> None:
     ]
 
 
+
+def test_slurm_command_gpu_type() -> None:
+    resources = {**SINGLE_GPU, "gpu_type": "rtx_pro_6000_blackwell"}
+    cmd = SlurmScheduler().build_submit_command(
+        SLURM_CLUSTER, resources, JOB, "launch.sh", []
+    )
+    assert "--gres=gpu:rtx_pro_6000_blackwell:1" in cmd
+    assert not any(a.startswith("--gpus-per-node") for a in cmd)
+
 @pytest.mark.parametrize("mem,expected", [("64gb", "64G"), ("32GB", "32G"), ("500M", "500M"), ("4096", "4096")])
 def test_slurm_mem_string(mem: str, expected: str) -> None:
     assert SlurmScheduler.mem_string(mem) == expected

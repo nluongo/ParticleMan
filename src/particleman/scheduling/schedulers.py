@@ -147,7 +147,11 @@ class SlurmScheduler(Scheduler):
         # One task per GPU so srun launches can fill the allocation
         cmd.append(f"--ntasks-per-node={max(gpus, 1)}")
         if gpus:
-            cmd.append(f"--gpus-per-node={gpus}")
+            gpu_type = resources.get("gpu_type")
+            if gpu_type:
+                cmd.append(f"--gres=gpu:{gpu_type}:{gpus}")
+            else:
+                cmd.append(f"--gpus-per-node={gpus}")
         cpus = resources.get("cpus_per_node")
         if cpus:
             cmd.append(f"--cpus-per-task={max(int(cpus) // max(gpus, 1), 1)}")
