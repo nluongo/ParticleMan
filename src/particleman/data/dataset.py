@@ -182,6 +182,7 @@ def create_dataloaders(
     max_events: Optional[int] = None,
     batch_size: int = 32,
     num_workers: int = 0,
+    persistent_workers: bool = False,
     pin_memory: bool = True,
     transform: Optional[Callable] = None,
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
@@ -198,6 +199,8 @@ def create_dataloaders(
         max_events: Maximum number of events to use (None for all).
         batch_size: Batch size for DataLoaders.
         num_workers: Number of worker processes for data loading.
+        persistent_workers: Keep workers alive between epochs (only applies
+            when num_workers > 0).
         pin_memory: Whether to pin memory for CUDA transfers.
         transform: Optional transform function applied to each sample.
 
@@ -251,6 +254,7 @@ def create_dataloaders(
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
+        persistent_workers=persistent_workers and num_workers > 0,
         pin_memory=pin_memory,
         drop_last=True,  # Drop incomplete batches for training
     )
@@ -260,6 +264,7 @@ def create_dataloaders(
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
+        persistent_workers=persistent_workers and num_workers > 0,
         pin_memory=pin_memory,
     )
 
@@ -268,6 +273,7 @@ def create_dataloaders(
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
+        persistent_workers=persistent_workers and num_workers > 0,
         pin_memory=pin_memory,
     )
 
@@ -333,6 +339,7 @@ def create_single_dataloader(
     batch_size: int = 32,
     shuffle: bool = True,
     num_workers: int = 0,
+    persistent_workers: bool = False,
     pin_memory: bool = True,
     transform: Optional[Callable] = None,
 ) -> DataLoader:
@@ -346,6 +353,8 @@ def create_single_dataloader(
         batch_size: Batch size for DataLoader.
         shuffle: Whether to shuffle the data.
         num_workers: Number of worker processes for data loading.
+        persistent_workers: Keep workers alive between epochs (only applies
+            when num_workers > 0).
         pin_memory: Whether to pin memory for CUDA transfers.
         transform: Optional transform function applied to each sample.
 
@@ -359,5 +368,6 @@ def create_single_dataloader(
         batch_size=batch_size,
         shuffle=shuffle,
         num_workers=num_workers,
+        persistent_workers=persistent_workers and num_workers > 0,
         pin_memory=pin_memory,
     )

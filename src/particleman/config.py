@@ -155,6 +155,8 @@ class TrainingConfig:
     mask_prob: float = 0.15
     event_label_mask_prob: float = 0.15
     num_workers: int = 0
+    # Keep DataLoader workers alive between epochs (ignored when num_workers=0)
+    persistent_workers: bool = False
     gradient_accumulation_steps: int = 1
     profile: bool = False
     pretrained_checkpoint: Optional[str] = None

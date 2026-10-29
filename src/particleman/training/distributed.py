@@ -184,6 +184,7 @@ def create_distributed_dataloader(
     batch_size: int,
     shuffle: bool = True,
     num_workers: int = 0,
+    persistent_workers: bool = False,
     pin_memory: bool = True,
     drop_last: bool = True,
     rank: int = 0,
@@ -198,6 +199,8 @@ def create_distributed_dataloader(
         batch_size: Batch size per GPU
         shuffle: Whether to shuffle (handled by sampler in distributed mode)
         num_workers: Number of data loading workers
+        persistent_workers: Keep workers alive between epochs (only applies
+            when num_workers > 0).
         pin_memory: Whether to pin memory for CUDA transfers
         drop_last: Whether to drop the last incomplete batch
         rank: Process rank
@@ -225,6 +228,7 @@ def create_distributed_dataloader(
         shuffle=shuffle if sampler is None else False,
         sampler=sampler,
         num_workers=num_workers,
+        persistent_workers=persistent_workers and num_workers > 0,
         pin_memory=pin_memory,
         drop_last=drop_last,
     )

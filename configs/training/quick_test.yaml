@@ -16,4 +16,6 @@ lr: 1.0e-4
 weight_decay: 0.01
 mask_prob: 0.15
 num_workers: 0
+# Keep DataLoader workers alive between epochs (ignored when num_workers=0)
+persistent_workers: false
 gradient_accumulation_steps: 1

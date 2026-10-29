@@ -20,6 +20,8 @@ mask_prob: 0.15
 event_label_mask_prob: 0.15
 # Number of data loading workers
 num_workers: 32
+# Keep DataLoader workers alive between epochs (ignored when num_workers=0)
+persistent_workers: false
 # Gradient accumulation steps (for effective larger batch sizes)
 gradient_accumulation_steps: 1
 # Enable torch.profiler to trace the training loop

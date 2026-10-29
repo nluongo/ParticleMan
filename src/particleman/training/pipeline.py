@@ -154,6 +154,7 @@ def run_training(cfg: DictConfig) -> None:
                     batch_size=cfg.training.batch_size,
                     shuffle=shuffle,
                     num_workers=cfg.training.num_workers,
+                    persistent_workers=cfg.training.persistent_workers,
                     rank=rank,
                     world_size=world_size,
                     drop_last=shuffle,
@@ -171,6 +172,7 @@ def run_training(cfg: DictConfig) -> None:
                 cfg.data,
                 batch_size=cfg.training.batch_size,
                 num_workers=cfg.training.num_workers,
+                persistent_workers=cfg.training.persistent_workers,
                 max_events=max_events,
             )
     except Exception as e:
