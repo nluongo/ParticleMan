@@ -98,6 +98,7 @@ def get_loaders(cfg, is_distributed=False, rank=None, world_size=None):
                 batch_size=cfg.training.batch_size,
                 shuffle=True,
                 num_workers=cfg.training.num_workers,
+                persistent_workers=cfg.training.persistent_workers,
                 rank=rank,
                 world_size=world_size,
                 seed=seed,
@@ -108,6 +109,7 @@ def get_loaders(cfg, is_distributed=False, rank=None, world_size=None):
                 batch_size=cfg.training.batch_size,
                 shuffle=False,
                 num_workers=cfg.training.num_workers,
+                persistent_workers=cfg.training.persistent_workers,
                 rank=rank,
                 world_size=world_size,
                 drop_last=False,
@@ -120,6 +122,7 @@ def get_loaders(cfg, is_distributed=False, rank=None, world_size=None):
                 cfg.data,
                 batch_size=cfg.training.batch_size,
                 num_workers=cfg.training.num_workers,
+                persistent_workers=cfg.training.persistent_workers,
                 max_events=max_events,
             )
     except Exception as e:

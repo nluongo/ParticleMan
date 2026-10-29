@@ -27,6 +27,7 @@ class MLFlowLogger(BaseLogger):
         self._mlflow = mlflow
 
         self._mlflow.set_experiment(experiment_name)
+        self._mlflow.enable_system_metrics_logging()
         self._mlflow.start_run(run_name=run_name)
 
     def log_params(self, params: Dict[str, Any]):

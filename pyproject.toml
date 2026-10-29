@@ -61,6 +61,7 @@ docs = [
 ]
 logging = [
     "mlflow>=3.9.0",
+    "nvidia-ml-py>=13.615.71",
 ]
 all = ["particleman[dev,docs,logging]"]
 
