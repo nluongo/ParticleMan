@@ -2,8 +2,8 @@
 """
 Demonstration of the HDF5 output format for ParticleMan.
 
-This script shows what the output of convert_xaod_to_h5.py looks like
-without requiring ROOT to be installed.
+This script shows an example HDF5 particle file without requiring any
+input ROOT files.
 
 Usage:
     python demo_h5_format.py [output_file.h5]
@@ -19,7 +19,7 @@ import numpy as np
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Particle ID mapping (same as in convert_xaod_to_h5.py)
+# Default categorical particle ID names
 PARTICLE_ID_MAP = {
     0: "Electrons/Positrons",
     1: "Muons/Antimuons", 

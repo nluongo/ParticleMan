@@ -28,7 +28,7 @@ All entry points use Hydra with `configs/` as the config dir. They are run as sc
 - `python scripts/train.py [overrides]` is the barebones in-process trainer (what workers run). `bash scripts/jobs/launch.sh scripts/train.py <overrides>` and plain `torchrun --standalone --nproc_per_node=N scripts/train.py ...` still work. For launch.sh, `LAUNCHER=torchrun` (the default), `mpiexec` (PBS) or `srun` (Slurm) picks the launch mode.
 - HPO: `scripts/hpo.py` (Optuna, SQLite study). `scripts/submit_hpo.sh N` launches N PBS workers that share one study.
 - `scripts/eval_predictions.py ++checkpoint=... ++out_file=x.npz ++eval_split=val` writes per-masked-particle predictions to an .npz file.
-- Data tools: `explore_root_file.py` / `explore_h5_file.py` (find branch names and suggest config snippets), `convert_xaod_to_h5.py`, `demo_h5_format.py`. See `scripts/README.md`.
+- Data tools: `explore_root_file.py` / `explore_h5_file.py` (find branch names and suggest config snippets), `convert_root_to_h5.py` (uproot, driven by a `data=` config; core in `particleman/data/conversion.py`), `demo_h5_format.py`. See `scripts/README.md`.
 
 ## Architecture
 

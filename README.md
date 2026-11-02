@@ -186,23 +186,15 @@ These scripts will suggest configuration snippets based on your file structure.
 
 ParticleMan includes tools for converting particle physics data from various formats to HDF5 for efficient machine learning training.
 
-### Converting xAOD ROOT Files
+### Converting ROOT Files
 
-The `convert_xaod_to_h5.py` script processes ATLAS xAOD files and extracts both truth and reconstructed particles:
+`convert_root_to_h5.py` converts ROOT ntuples to padded HDF5 with uproot (no ROOT installation needed). It uses a data config for branches, ID mapping and cuts, and writes one `.h5` per input file:
 
 ```bash
-# Basic usage
-python scripts/convert_xaod_to_h5.py input.root output.h5
-
-# With options
-python scripts/convert_xaod_to_h5.py input.root output.h5 --max-events 1000 --max-particles 150
+python scripts/convert_root_to_h5.py data=bbllv08 ++output_dir=/path/to/h5 data.max_events=1000
 ```
 
-**Requirements for xAOD processing:**
-```bash
-# Install ROOT with Python bindings
-conda install -c conda-forge root
-```
+Train on the output with `data=preprocessed_h5 data.source.files='[/path/to/h5/*.h5]'`. See `scripts/README.md`.
 
 ### Demo Data Format
 
@@ -356,7 +348,7 @@ particleman/
 ├── scripts/
 │   ├── explore_root_file.py       # ROOT file structure explorer
 │   ├── explore_h5_file.py         # HDF5 file structure explorer
-│   ├── convert_xaod_to_h5.py
+│   ├── convert_root_to_h5.py      # ROOT → HDF5 conversion (uproot)
 │   └── demo_h5_format.py
 ├── environment.yml                # CPU-only conda environment
 ├── environment-gpu.yml            # GPU-enabled conda environment

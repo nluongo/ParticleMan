@@ -6,6 +6,7 @@ which is a common format for preprocessed physics data.
 """
 
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -46,14 +47,18 @@ class HDF5ParticleLoader(BaseParticleLoader):
 
     def _open_files(self) -> None:
         """
-        Open HDF5 files and build event index.
+        Scan HDF5 files and build event index.
 
         This method:
-            1. Opens each HDF5 file
-            2. Determines the number of events per file
-            3. Builds an index mapping global event index to (file_idx, local_idx)
+            1. Opens each HDF5 file briefly to count its events
+            2. Builds an index mapping global event index to (file_idx, local_idx)
+
+        Handles are opened lazily per process by _get_file(), so the loader
+        can be pickled into DataLoader worker processes.
         """
-        self._files: List[h5py.File] = []
+        # One lazily opened handle per entry in _file_paths (None = not open)
+        self._files: List[Optional[h5py.File]] = []
+        self._owner_pid = os.getpid()
         self._event_offsets: List[int] = [0]
         self._total_events = 0
         self._file_paths: List[Path] = []  # Keep track of paths for reopening
@@ -81,7 +86,7 @@ class HDF5ParticleLoader(BaseParticleLoader):
             raise ValueError("No events found in any of the specified files")
 
         logger.info(
-            f"Loaded {len(self._files)} file(s) with {self._total_events} total events"
+            f"Loaded {len(self._file_paths)} file(s) with {self._total_events} total events"
         )
 
     def _add_file(self, filepath: Path) -> None:
@@ -92,18 +97,16 @@ class HDF5ParticleLoader(BaseParticleLoader):
             filepath: Path to HDF5 file.
         """
         try:
-            f = h5py.File(filepath, "r")
-
             # Determine number of events
             # Try to find a dataset to get the event count
-            n_events = self._get_num_events(f)
+            with h5py.File(filepath, "r") as f:
+                n_events = self._get_num_events(f)
 
             if n_events == 0:
                 logger.warning(f"No events found in {filepath}")
-                f.close()
                 return
 
-            self._files.append(f)
+            self._files.append(None)
             self._file_paths.append(filepath)
             self._event_offsets.append(self._event_offsets[-1] + n_events)
             self._total_events += n_events
@@ -113,6 +116,35 @@ class HDF5ParticleLoader(BaseParticleLoader):
         except Exception as e:
             logger.error(f"Failed to open {filepath}: {e}")
             raise
+
+    def _get_file(self, file_idx: int) -> h5py.File:
+        """
+        Return the open handle for a file, opening it in this process if needed.
+
+        h5py handles must not be shared between processes, so a forked worker
+        discards the handles it inherited and opens its own.
+
+        Args:
+            file_idx: Index into self._file_paths.
+
+        Returns:
+            Open read-only h5py.File.
+        """
+        if os.getpid() != self._owner_pid:
+            # Inherited from the parent via fork: drop without closing
+            self._files = [None] * len(self._file_paths)
+            self._owner_pid = os.getpid()
+        f = self._files[file_idx]
+        if f is None:
+            f = h5py.File(self._file_paths[file_idx], "r")
+            self._files[file_idx] = f
+        return f
+
+    def __getstate__(self) -> Dict[str, Any]:
+        """Pickle without open h5py handles (they are reopened on demand)."""
+        state = self.__dict__.copy()
+        state["_files"] = [None] * len(self._file_paths)
+        return state
 
     def _get_num_events(self, f: h5py.File) -> int:
         """
@@ -175,7 +207,7 @@ class HDF5ParticleLoader(BaseParticleLoader):
         Returns:
             Tuple of (file_index, local_event_index).
         """
-        for file_idx in range(len(self._files)):
+        for file_idx in range(len(self._file_paths)):
             if global_idx < self._event_offsets[file_idx + 1]:
                 local_idx = global_idx - self._event_offsets[file_idx]
                 return file_idx, local_idx
@@ -199,7 +231,7 @@ class HDF5ParticleLoader(BaseParticleLoader):
             Tuple of (pt, eta, phi, particle_id) numpy arrays.
         """
         file_idx, local_idx = self._get_file_and_local_idx(idx)
-        f = self._files[file_idx]
+        f = self._get_file(file_idx)
         
         # Access columns config
         columns = collection_config.get("columns", {})
@@ -304,7 +336,7 @@ class HDF5ParticleLoader(BaseParticleLoader):
         Returns:
             List of dataset names.
         """
-        if not self._files:
+        if not self._file_paths:
             return []
 
         def collect_names(group: h5py.Group, prefix: str = "") -> List[str]:
@@ -319,7 +351,7 @@ class HDF5ParticleLoader(BaseParticleLoader):
                     names.extend(collect_names(item, full_name))
             return names
 
-        return collect_names(self._files[0])
+        return collect_names(self._get_file(0))
 
     def get_dataset_info(self, dataset_name: str) -> Dict[str, Any]:
         """
@@ -331,10 +363,10 @@ class HDF5ParticleLoader(BaseParticleLoader):
         Returns:
             Dictionary with dataset information.
         """
-        if not self._files:
+        if not self._file_paths:
             return {}
 
-        f = self._files[0]
+        f = self._get_file(0)
         if dataset_name not in f:
             return {"error": f"Dataset '{dataset_name}' not found"}
 
@@ -380,12 +412,14 @@ class HDF5ParticleLoader(BaseParticleLoader):
 
     def close(self) -> None:
         """Close all open HDF5 files."""
-        for f in self._files:
+        for f in getattr(self, "_files", []):
+            if f is None:
+                continue
             try:
                 f.close()
             except Exception:
                 pass
-        self._files = []
+        self._files = [None] * len(getattr(self, "_file_paths", []))
 
     def __del__(self) -> None:
         """Cleanup on deletion."""

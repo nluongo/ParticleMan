@@ -2,154 +2,60 @@
 
 This directory contains scripts for converting particle physics data to formats suitable for training the ParticleTransformer model.
 
-## `convert_xaod_to_h5.py`
+## `convert_root_to_h5.py`
 
-Converts ROOT xAOD files (ATLAS Analysis Object Data format) to HDF5 files suitable for machine learning training.
+Converts ROOT ntuples to padded HDF5 files using **uproot** (no ROOT/PyROOT installation needed). The core logic lives in `src/particleman/data/conversion.py`.
 
-### Features
+The conversion is driven by a data config (`configs/data/*.yaml`), the same one `ROOTParticleLoader` uses:
 
-- **Extracts both truth and reconstructed particles**
-- **Applies physics-motivated quality cuts**
-- **Maps PDG particle IDs to categorical IDs (0-15)**
-- **Handles variable-length events with padding/truncation**
-- **Preserves event structure and metadata**
+- `source.files` / `source.tree_name`: input files (glob patterns allowed) and tree
+- `collections`: which branches to read; enabled collections are merged per event in config order
+- `particle_id_map` / `default_particle_id`: raw ID (PDG code, jet truth label) to categorical ID
+- `preprocessing`: `pt_scale`, `pt_cut`, `eta_cut`, `max_particles`
 
-### Particle ID Mapping
+Each event in the output equals `ROOTParticleLoader.get_event(i)` with `shuffle_particles=false`. Particles are not shuffled on disk; turn shuffling on when training on the output.
 
-The script maps complex PDG particle codes to simple categorical IDs:
-
-| ID | Particle Type | PDG Codes | Notes |
-|----|---------------|-----------|-------|
-| 0  | Electrons/Positrons | ±11 | |
-| 1  | Muons/Antimuons | ±13 | |
-| 2  | Taus/Antitaus | ±15 | |
-| 3  | Electron Neutrinos | ±12 | Truth only |
-| 4  | Muon Neutrinos | ±14 | Truth only |
-| 5  | Tau Neutrinos | ±16 | Truth only |
-| 6  | Photons | 22 | |
-| 7  | Charged Pions | ±211 | Also used for jets |
-| 8  | Neutral Pions | 111 | |
-| 9  | Charged Kaons | ±321 | |
-| 10 | Neutral Kaons | 130, 310 | |
-| 11 | Protons/Antiprotons | ±2212 | |
-| 12 | Neutrons/Antineutrons | ±2112 | |
-| 13 | B Mesons | ±511, ±521, ±531 | |
-| 14 | D Mesons | ±411, ±421, ±431 | |
-| 15 | Other/Unknown | All others | Also used for padding |
+Each input `<name>.root` is written to `<output_dir>/<name>.h5`, so `file_event_label_map` patterns (e.g. `ttbar*`) still match the converted files.
 
 ### Usage
 
 ```bash
-# Basic usage
-python scripts/convert_xaod_to_h5.py input.root output.h5
+# Convert every file in the bbllv08 config
+python scripts/convert_root_to_h5.py data=bbllv08 ++output_dir=/path/to/h5
 
-# Limit number of events
-python scripts/convert_xaod_to_h5.py input.root output.h5 --max-events 1000
-
-# Custom maximum particles per event
-python scripts/convert_xaod_to_h5.py input.root output.h5 --max-particles 150
-
-# Verbose output
-python scripts/convert_xaod_to_h5.py input.root output.h5 --verbose
+# Options
+python scripts/convert_root_to_h5.py data=bbllv08 ++output_dir=h5 \
+    ++step_size=10000 \            # entries read per uproot chunk
+    ++overwrite=true \             # default: skip outputs that already exist
+    ++skip_empty=true \            # drop events with no particles after cuts
+    data.max_events=1000 \         # per input file
+    data.preprocessing.max_particles=100 \
+    data.source.files='[a.root,b.root]'
 ```
 
-### Requirements
-
-Install the required dependencies:
-
-```bash
-# Using conda (recommended)
-conda install -c conda-forge root h5py numpy tqdm
-
-# Or using pip (if ROOT is already installed)
-pip install h5py numpy tqdm
-```
+Missing branches raise an error before anything is written. Use `explore_root_file.py` to find branch names.
 
 ### Output Format
 
-The resulting HDF5 file contains:
-
 **Datasets:**
-- `pt`: Transverse momentum in GeV [n_events, max_particles]
-- `eta`: Pseudorapidity [n_events, max_particles]  
-- `phi`: Azimuthal angle in radians [n_events, max_particles]
-- `particle_id`: Categorical particle type (0-15) [n_events, max_particles]
-- `is_truth`: Boolean flag (True=truth, False=reco) [n_events, max_particles]
-- `event_id`: Original event index [n_events]
+- `pt`: Transverse momentum in GeV (after `pt_scale`), zero-padded [n_events, max_particles] float32
+- `eta`: Pseudorapidity [n_events, max_particles] float32
+- `phi`: Azimuthal angle in radians [n_events, max_particles] float32
+- `particle_id`: Categorical particle ID, padded with `default_particle_id` [n_events, max_particles] int32
+- `n_particles`: Particles after cuts, before truncation [n_events] int32
+- `event_id`: Entry index in the source tree [n_events] int64
 
-**Metadata:**
-- Source file information
-- Particle ID mapping
-- Quality cut parameters
-- Dataset descriptions
+**Attributes:** `n_events`, `source_file`, `tree_name`, `max_particles`, `pt_scale_applied`, `pt_cut`, `eta_cut`, `particle_id_map`, `default_particle_id`, `collections`.
 
-### Quality Cuts Applied
+### Training on the Output
 
-**Truth Particles:**
-- Only final state particles (status code 1 or 23)
-- pt > 0.5 GeV
-- |eta| < 5.0
+Use `configs/data/preprocessed_h5.yaml`, which has identity ID mapping and no cuts or scaling:
 
-**Reconstructed Particles:**
-- **Electrons:** pt > 7 GeV, |eta| < 2.47
-- **Muons:** pt > 6 GeV, |eta| < 2.5  
-- **Photons:** pt > 10 GeV, |eta| < 2.37
-- **Jets:** pt > 20 GeV, |eta| < 4.5
-
-### Example Integration with ParticleMan
-
-```python
-import h5py
-import torch
-from torch.utils.data import Dataset
-
-class ParticlePhysicsDataset(Dataset):
-    def __init__(self, h5_file):
-        self.h5_file = h5_file
-        with h5py.File(h5_file, 'r') as f:
-            self.n_events = len(f['pt'])
-    
-    def __len__(self):
-        return self.n_events
-    
-    def __getitem__(self, idx):
-        with h5py.File(self.h5_file, 'r') as f:
-            return {
-                'pt': torch.tensor(f['pt'][idx], dtype=torch.float32),
-                'eta': torch.tensor(f['eta'][idx], dtype=torch.float32),
-                'phi': torch.tensor(f['phi'][idx], dtype=torch.float32),
-                'particle_id': torch.tensor(f['particle_id'][idx], dtype=torch.long),
-                'is_truth': torch.tensor(f['is_truth'][idx], dtype=torch.bool)
-            }
-
-# Usage
-dataset = ParticlePhysicsDataset('output.h5')
-dataloader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=True)
-```
-
-### Troubleshooting
-
-**Common Issues:**
-
-1. **ROOT not found:** Install ROOT with Python bindings
-2. **Tree not found:** Check tree names in your xAOD file
-3. **Container not found:** xAOD container names may vary between versions
-4. **Memory issues:** Reduce `--max-events` or `--max-particles`
-
-**Debugging:**
-
-Use `--verbose` flag for detailed logging:
 ```bash
-python scripts/convert_xaod_to_h5.py input.root output.h5 --verbose
+python scripts/run.py data=preprocessed_h5 \
+    data.source.files='[/path/to/h5/*.h5]' \
+    data.preprocessing.max_particles=<same as conversion> \
+    data.preprocessing.shuffle_particles=true
 ```
 
-### Extending the Script
-
-To add support for new particle types or containers:
-
-1. **Add PDG codes to `PARTICLE_ID_MAP`**
-2. **Update particle extraction functions**
-3. **Add quality cuts as needed**
-4. **Update documentation**
-
-The script is designed to be modular and easily extensible for different xAOD formats and analysis requirements. 
+To train a classifier, add the same `file_event_label_map` and `n_event_types` as the source config.
