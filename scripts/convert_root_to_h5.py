@@ -83,7 +83,7 @@ def main(cfg: DictConfig) -> None:
 
     total = 0
     for input_path in inputs:
-        output_path = output_dir / f"{input_path.stem}.h5"
+        output_path = output_dir / f"{input_path.stem}.h5".replace(".root", "").replace(".pool", "")
         if output_path.exists() and not overwrite:
             logger.info(f"Skipping {output_path} (exists; use ++overwrite=true)")
             continue
