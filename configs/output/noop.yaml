@@ -22,3 +22,5 @@ log_interval: 1
 experiment_logger: noop
 # MLflow experiment path prefix, e.g. "/Users/<email>" for Databricks (null = none)
 mlflow_experiment_prefix: null
+# MLflow: log metrics/params on a background thread instead of blocking training
+async_logging: true

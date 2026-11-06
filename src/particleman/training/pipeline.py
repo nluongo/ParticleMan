@@ -263,6 +263,7 @@ def run_training(cfg: DictConfig) -> None:
                 cfg.output, cfg.output.experiment_name
             ),
             run_name=output.run_name,
+            async_logging=cfg.output.async_logging,
         )
         train_experiment_logger.log_params(model_config_dict)
         train_experiment_logger.log_params(training_config_dict)
@@ -330,6 +331,7 @@ def run_training(cfg: DictConfig) -> None:
                 cfg.output, f"{cfg.output.experiment_name}_test"
             ),
             run_name=output.run_name,
+            async_logging=cfg.output.async_logging,
         )
         test_experiment_logger.log_params(model_config_dict)
         test_experiment_logger.log_params(training_config_dict)
