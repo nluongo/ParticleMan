@@ -19,6 +19,10 @@ class BaseLogger(ABC):
         """Close the logger and finish any pending operations."""
         pass
 
+    def log_artifact(self, local_path: str, artifact_path: Optional[str] = None):
+        """Upload a local file to the run. Loggers without artifacts ignore it."""
+        pass
+
 class NoOpLogger(BaseLogger):
     """A logger that does nothing. Used as a default."""
     def log_params(self, params: Dict[str, Any]):

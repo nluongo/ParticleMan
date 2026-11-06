@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional
 from omegaconf import DictConfig, OmegaConf
 
 from particleman.data import create_dataloaders, create_datasets
-from particleman.loggers import create_logger
+from particleman.loggers import create_logger, flatten_config
 from particleman.models import (
     AttentionBiasTransformer,
     EmbeddingType,
@@ -241,16 +241,20 @@ def run_training(cfg: DictConfig) -> None:
         "test_dataset_size": len(test_loader.dataset),  # type: ignore[arg-type]
     }
 
+    # Every leaf of the resolved Hydra config, e.g. ``data.preprocessing.pt_scale``
+    hydra_config = OmegaConf.to_container(cfg, resolve=True, enum_to_str=True)
+    assert isinstance(hydra_config, dict)
+    full_config_params = flatten_config(hydra_config)
+
     # Save config and create the experiment logger (main process only)
     train_experiment_logger = None
+    config_path: Optional[Path] = None
     if output is not None:
-        output.save_config(
+        config_path = output.save_config(
             {
                 "model": model_config_dict,
                 "training": training_config_dict,
-                "hydra_config": OmegaConf.to_container(
-                    cfg, resolve=True, enum_to_str=True
-                ),
+                "hydra_config": hydra_config,
             }
         )
         train_experiment_logger = create_logger(
@@ -263,6 +267,9 @@ def run_training(cfg: DictConfig) -> None:
         train_experiment_logger.log_params(model_config_dict)
         train_experiment_logger.log_params(training_config_dict)
         train_experiment_logger.log_params({"machine": cfg.cluster.machine_name})
+        train_experiment_logger.log_params(full_config_params)
+        # Untruncated copy of the config (params cap long values)
+        train_experiment_logger.log_artifact(str(config_path))
         logger.info("Creating trainer...")
 
     save_dir = output.checkpoint_dir if output else None
@@ -327,6 +334,7 @@ def run_training(cfg: DictConfig) -> None:
         test_experiment_logger.log_params(model_config_dict)
         test_experiment_logger.log_params(training_config_dict)
         test_experiment_logger.log_params({"machine": cfg.cluster.machine_name})
+        test_experiment_logger.log_params(full_config_params)
 
         logger.info("Test Results:")
         logger.info(f"  Total Loss: {test_losses['total_loss']:.4f}")

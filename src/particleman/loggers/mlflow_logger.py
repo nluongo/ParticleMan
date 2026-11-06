@@ -34,11 +34,18 @@ class MLFlowLogger(BaseLogger):
         # mlflow has a limit on param value length, so we truncate
         truncated_params = {}
         for key, value in params.items():
-            if isinstance(value, str) and len(value) > 250:
-                truncated_params[key] = value[:247] + "..."
+            text = value if isinstance(value, str) else str(value)
+            if len(text) > 250:
+                truncated_params[key] = text[:247] + "..."
             else:
                 truncated_params[key] = value
-        self._mlflow.log_params(truncated_params)
+        # mlflow accepts at most 100 params per batch request
+        items = list(truncated_params.items())
+        for start in range(0, len(items), 100):
+            self._mlflow.log_params(dict(items[start : start + 100]))
+
+    def log_artifact(self, local_path: str, artifact_path: Optional[str] = None):
+        self._mlflow.log_artifact(local_path, artifact_path=artifact_path)
 
     def log_metrics(self, metrics: Dict[str, float], step: Optional[int] = None):
         self._mlflow.log_metrics(metrics, step=step)
