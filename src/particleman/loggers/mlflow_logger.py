@@ -43,5 +43,8 @@ class MLFlowLogger(BaseLogger):
     def log_metrics(self, metrics: Dict[str, float], step: Optional[int] = None):
         self._mlflow.log_metrics(metrics, step=step)
 
+    def log_artifacts(self, local_dir: str, artifact_path: Optional[str] = None):
+        self._mlflow.log_artifacts(local_dir, artifact_path=artifact_path)
+
     def close(self):
         self._mlflow.end_run()

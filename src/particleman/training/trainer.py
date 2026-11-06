@@ -486,11 +486,14 @@ class ParticleTrainer:
     def _create_profiler(self) -> torch.profiler.profile:
         """Create a torch.profiler.profile instance for tracing the training loop."""
         self.profile_dir.mkdir(parents=True, exist_ok=True)
+        profiler_schedule = torch.profiler.schedule(wait=1, warmup=1, active=2, repeat=1)
         return torch.profiler.profile(
             activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+            schedule=profiler_schedule,
             record_shapes=True,
             profile_memory=True,
             with_stack=False,
+            on_trace_ready=torch.profiler.tensorboard_trace_handler(self.profile_dir)
         )
 
     def _report_profile(self, prof: torch.profiler.profile) -> None:
@@ -499,9 +502,8 @@ class ParticleTrainer:
             return
 
         trace_path = self.profile_dir / "trace.json"
-        prof.export_chrome_trace(str(trace_path))
         logger.info(f"Profiler trace saved to {trace_path}")
-
+        self.experiment_logger.log_artifacts(self.profile_dir, artifact_path="profiler_traces")
         logger.info(
             "Profiler summary (sorted by CPU time):\n"
             + prof.key_averages().table(sort_by="cpu_time_total", row_limit=30)
@@ -671,7 +673,8 @@ class ParticleTrainer:
                             metrics_to_log['avg_loss'] = avg_loss
                             metrics_to_log['lr'] = lr
                             metrics_to_log = {f"train_{k}": v for k, v in metrics_to_log.items()}
-                            self.experiment_logger.log_metrics(metrics_to_log, step=self.step)
+                            with torch.autograd.profiler.record_function("training_log_metrics"):
+                                self.experiment_logger.log_metrics(metrics_to_log, step=self.step)
 
                     if prof is not None:
                         prof.step()
