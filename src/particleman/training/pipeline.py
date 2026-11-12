@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional
 
 from omegaconf import DictConfig, OmegaConf
 
-from particleman.data import create_dataloaders, create_datasets
+from particleman.data import count_events, create_dataloaders, create_datasets
 from particleman.loggers import create_logger, flatten_config
 from particleman.models import (
     AttentionBiasTransformer,
@@ -135,10 +135,31 @@ def run_training(cfg: DictConfig) -> None:
         logger.info(f"Files: {source.get('files', [])}")
         logger.info(f"Enabled collections: {enabled_collections}")
         logger.info(f"Max particles per event: {preproc.get('max_particles', 200)}")
-        logger.info("Creating dataloaders...")
 
     # Get max_events from config (can be None for all events)
     max_events = cfg.data.get("max_events", None)
+
+    # Input files and available events (metadata only; main process only)
+    available_events: Optional[int] = None
+    n_input_files: Optional[int] = None
+    if main_process:
+        try:
+            event_count = count_events(cfg.data)
+        except Exception as e:
+            logger.error(f"Failed to count input events: {e}")
+            logger.error("Make sure the data files exist and the config is correct.")
+            cleanup_distributed()
+            raise
+        available_events = event_count.total
+        n_input_files = event_count.n_files
+        logger.info(f"Input files: {n_input_files}")
+        logger.info(f"Available events: {available_events}")
+        n_used = event_count.n_used(max_events)
+        if n_used < available_events:
+            logger.info(
+                f"Using {n_used} of {available_events} events (data.max_events)"
+            )
+        logger.info("Creating dataloaders...")
 
     try:
         if is_distributed:
@@ -228,6 +249,8 @@ def run_training(cfg: DictConfig) -> None:
     training_config_dict: Dict[str, Any] = {
         "trainer_class": "ParticleTrainer",
         "max_events": max_events,
+        "available_events": available_events,
+        "n_input_files": n_input_files,
         "batch_size": cfg.training.batch_size,
         "effective_batch_size": cfg.training.batch_size * world_size,
         "lr": cfg.training.lr,

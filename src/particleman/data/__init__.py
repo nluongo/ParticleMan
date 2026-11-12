@@ -10,6 +10,7 @@ the loaders and dataset classes.
 
 from .dataset import (
     ParticleDataset,
+    create_loader,
     create_dataloaders,
     create_datasets,
     create_single_dataloader,
@@ -17,6 +18,7 @@ from .dataset import (
 from .base_loader import BaseParticleLoader, ConfigType
 from .root_loader import ROOTParticleLoader
 from .hdf5_loader import HDF5ParticleLoader
+from .counting import EventCount, FileEventCount, count_events
 
 __all__ = [
     # Dataset
@@ -24,6 +26,11 @@ __all__ = [
     "create_dataloaders",
     "create_datasets",
     "create_single_dataloader",
+    "create_loader",
+    # Counting
+    "count_events",
+    "EventCount",
+    "FileEventCount",
     # Loaders
     "BaseParticleLoader",
     "ROOTParticleLoader",

@@ -7,6 +7,7 @@ along with common preprocessing logic.
 
 import fnmatch
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any, Dict, Iterator, List, Mapping, Tuple, Union
 
 import numpy as np
@@ -135,6 +136,23 @@ class BaseParticleLoader(ABC):
                     label = int(lbl)
                     break
             self._event_labels.append(label)
+
+    def file_event_counts(self) -> List[Tuple[Path, int]]:
+        """
+        Return the number of events contributed by each input file.
+
+        Built from the ``_file_paths`` and ``_event_offsets`` tables that
+        subclasses fill in ``_open_files``. Files skipped for having no
+        events are not included.
+
+        Returns:
+            List of (file path, number of events), in loader order.
+        """
+        file_paths: List[Path] = getattr(self, "_file_paths", [])
+        offsets: List[int] = getattr(self, "_event_offsets", [0])
+        return [
+            (path, offsets[i + 1] - offsets[i]) for i, path in enumerate(file_paths)
+        ]
 
     def get_event(self, idx: int) -> Dict[str, np.ndarray]:
         """

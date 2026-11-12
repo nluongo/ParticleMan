@@ -20,6 +20,28 @@ from .hdf5_loader import HDF5ParticleLoader
 logger = logging.getLogger(__name__)
 
 
+def create_loader(config: ConfigType) -> BaseParticleLoader:
+    """
+    Create the particle loader selected by ``source.type``.
+
+    Args:
+        config: Data configuration (Hydra DictConfig or plain dict).
+
+    Returns:
+        A ``ROOTParticleLoader`` or ``HDF5ParticleLoader``.
+
+    Raises:
+        ValueError: If ``source.type`` is not ``root`` or ``hdf5``.
+    """
+    source = config.get("source", {})
+    source_type = source.get("type", "root").lower()
+    if source_type == "root":
+        return ROOTParticleLoader(config)
+    if source_type == "hdf5":
+        return HDF5ParticleLoader(config)
+    raise ValueError(f"Unknown source type: {source_type}")
+
+
 class ParticleDataset(Dataset):
     """
     PyTorch Dataset for particle physics data.
@@ -58,14 +80,7 @@ class ParticleDataset(Dataset):
         self.indices = indices
 
         # Create appropriate loader based on source type
-        source = config.get("source", {})
-        source_type = source.get("type", "root").lower()
-        if source_type == "root":
-            self.loader: BaseParticleLoader = ROOTParticleLoader(config)
-        elif source_type == "hdf5":
-            self.loader = HDF5ParticleLoader(config)
-        else:
-            raise ValueError(f"Unknown source type: {source_type}")
+        self.loader: BaseParticleLoader = create_loader(config)
 
         # Set up index mapping
         if indices is not None:

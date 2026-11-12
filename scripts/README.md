@@ -59,3 +59,19 @@ python scripts/run.py data=preprocessed_h5 \
 ```
 
 To train a classifier, add the same `file_event_label_map` and `n_event_types` as the source config.
+
+## `count_events.py`
+
+Reports the number of input files and the total number of events a data config
+provides. It reads only file metadata (ROOT tree entries / HDF5 dataset shapes)
+and uses the same Hydra configs as training.
+
+```bash
+python scripts/count_events.py data=mc20_h5
+python scripts/count_events.py --config-name bbllv08 ++per_file=true   # per-file table with event labels
+```
+
+If `data.max_events` is set, it also prints how many events training would use
+and the train/val/test split sizes. Training (`run_training`) logs the same
+`Input files` / `Available events` numbers and records them as the
+`n_input_files` and `available_events` params.
