@@ -683,7 +683,7 @@ class ParticleTrainer:
                         prof.step()
 
                 epoch_batch_losses = batch_losses[-n_batches:]
-                epoch_losses = {k : sum(l[k] for l in v) / n_batches for k:v in epoch_batch_losses.items()} 
+                epoch_losses = {k : sum(batch[k] for batch in epoch_batch_losses) / n_batches for k in epoch_batch_losses[0].keys()} 
 
                 epoch_metrics_to_log = {f"train_epoch_{k}": v for k, v in epoch_losses.items()}
                 with torch.autograd.profiler.record_function("training_epoch_log_metrics"):
