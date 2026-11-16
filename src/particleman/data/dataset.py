@@ -135,9 +135,9 @@ class ParticleDataset(Dataset):
     def max_particles(self) -> int:
         """Return the maximum number of particles per event."""
         preproc = self.config.get("preprocessing", {})
-        return preproc.get("max_particles", 200)
+        return int(preproc.get("max_particles", 200))
 
-    def get_raw_event(self, idx: int) -> Dict[str, np.ndarray]:
+    def get_raw_event(self, idx: int) -> Dict[str, Any]:
         """
         Get a raw event (numpy arrays) without transformation.
 

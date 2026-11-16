@@ -171,20 +171,20 @@ class HDF5ParticleLoader(BaseParticleLoader):
             if pt_col in f:
                 dataset = f[pt_col]
                 if len(dataset.shape) >= 1:
-                    return dataset.shape[0]
+                    return int(dataset.shape[0])
 
         # Strategy 3: Check common dataset names
         for common_name in ["pt", "event_id", "events", "n_particles"]:
             if common_name in f:
                 dataset = f[common_name]
                 if len(dataset.shape) >= 1:
-                    return dataset.shape[0]
+                    return int(dataset.shape[0])
 
         # Strategy 4: Check any dataset
         for key in f.keys():
             if isinstance(f[key], h5py.Dataset):
                 if len(f[key].shape) >= 1:
-                    return f[key].shape[0]
+                    return int(f[key].shape[0])
 
         return 0
 

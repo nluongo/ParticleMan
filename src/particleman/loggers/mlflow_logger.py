@@ -1,4 +1,5 @@
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from pathlib import Path
+from typing import Any, Dict, Optional, TYPE_CHECKING, Union
 from .base import BaseLogger
 
 if TYPE_CHECKING:
@@ -12,7 +13,7 @@ class MLFlowLogger(BaseLogger):
         experiment_name: str,
         run_name: Optional[str] = None,
         async_logging: bool = False,
-    ):
+    ) -> None:
         """
         Initialize MLFlow experiment.
         Args:
@@ -38,9 +39,9 @@ class MLFlowLogger(BaseLogger):
         self._mlflow.enable_system_metrics_logging()
         self._mlflow.start_run(run_name=run_name)
 
-    def log_params(self, params: Dict[str, Any]):
+    def log_params(self, params: Dict[str, Any]) -> None:
         # mlflow has a limit on param value length, so we truncate
-        truncated_params = {}
+        truncated_params: Dict[str, Any] = {}
         for key, value in params.items():
             text = value if isinstance(value, str) else str(value)
             if len(text) > 250:
@@ -54,16 +55,18 @@ class MLFlowLogger(BaseLogger):
                 dict(items[start : start + 100]), synchronous=not self._async
             )
 
-    def log_artifact(self, local_path: str, artifact_path: Optional[str] = None):
+    def log_artifact(self, local_path: str, artifact_path: Optional[str] = None) -> None:
         self._mlflow.log_artifact(local_path, artifact_path=artifact_path)
 
-    def log_metrics(self, metrics: Dict[str, float], step: Optional[int] = None):
+    def log_metrics(self, metrics: Dict[str, float], step: Optional[int] = None) -> None:
         self._mlflow.log_metrics(metrics, step=step, synchronous=not self._async)
 
-    def log_artifacts(self, local_dir: str, artifact_path: Optional[str] = None):
-        self._mlflow.log_artifacts(local_dir, artifact_path=artifact_path)
+    def log_artifacts(
+        self, local_dir: Union[str, Path], artifact_path: Optional[str] = None
+    ) -> None:
+        self._mlflow.log_artifacts(str(local_dir), artifact_path=artifact_path)
 
-    def close(self):
+    def close(self) -> None:
         if self._async:
             # Send queued metrics/params before the run is marked FINISHED
             self._mlflow.flush_async_logging()

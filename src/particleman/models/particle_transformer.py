@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -213,7 +213,8 @@ class JointEmbedding(nn.Module):
         
         # Concatenate and project: (batch, seq, d_model)
         x = torch.cat([continuous, id_emb], dim=-1)
-        return self.mlp(x)
+        out: Tensor = self.mlp(x)
+        return out
 
 class AngularAttentionBias(nn.Module):
     """Compute pairwise angular attention bias from eta/phi coordinates.
@@ -231,8 +232,10 @@ class AngularAttentionBias(nn.Module):
             nn.Linear(bias_hidden_dim, n_heads),
         )
         # Small initialization so bias starts near zero
-        nn.init.normal_(self.mlp[-1].weight, std=0.01)
-        nn.init.zeros_(self.mlp[-1].bias)
+        out_layer = self.mlp[-1]
+        assert isinstance(out_layer, nn.Linear)
+        nn.init.normal_(out_layer.weight, std=0.01)
+        nn.init.zeros_(out_layer.bias)
 
     def forward(self, eta: Tensor, phi: Tensor) -> Tensor:
         """
@@ -254,19 +257,21 @@ class AngularAttentionBias(nn.Module):
         delta_phi = torch.atan2(sin_dphi, cos_dphi)              # exact Δφ in (-π, π]
         delta_R = torch.sqrt(delta_eta ** 2 + delta_phi ** 2 + 1e-8)
         features = torch.stack([delta_eta, sin_dphi, cos_dphi, delta_R], dim=-1)
-        bias = self.mlp(features)                                  # (batch, seq, seq, n_heads)
+        bias: Tensor = self.mlp(features)                          # (batch, seq, seq, n_heads)
         return bias.permute(0, 3, 1, 2)                           # (batch, n_heads, seq, seq)
 
 
 class _BiasedTransformerEncoderLayer(nn.TransformerEncoderLayer):
     """TransformerEncoderLayer that accepts an additive attention bias."""
 
-    def forward(
+    # The second positional argument is an additive attention bias rather than
+    # the parent's src_mask, so the signature deliberately differs.
+    def forward(  # type: ignore[override]
         self,
         src: Tensor,
         attn_bias: Optional[Tensor] = None,
         src_key_padding_mask: Optional[Tensor] = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> Tensor:
         """
         Args:
@@ -297,6 +302,7 @@ class _BiasedTransformerEncoderLayer(nn.TransformerEncoderLayer):
         x: Tensor,
         attn_mask: Optional[Tensor],
         key_padding_mask: Optional[Tensor],
+        is_causal: bool = False,
     ) -> Tensor:
         # Convert bool padding mask to additive float mask to match attn_mask type
         # and avoid the PyTorch type-mismatch deprecation warning.
@@ -312,7 +318,8 @@ class _BiasedTransformerEncoderLayer(nn.TransformerEncoderLayer):
             key_padding_mask=float_key_padding_mask,
             need_weights=False,
         )
-        return self.dropout1(x)
+        out: Tensor = self.dropout1(x)
+        return out
 
 
 class _BiasedTransformerEncoder(nn.Module):
@@ -342,6 +349,7 @@ class ParticleTransformer(nn.Module):
         self.config = config
         
         # Select embedding strategy
+        self.embedding: nn.Module
         if config.embedding_type == EmbeddingType.CONCAT:
             self.embedding = ConcatEmbedding(config)
         else:  # JOINT (default)
@@ -355,7 +363,9 @@ class ParticleTransformer(nn.Module):
             dropout=config.dropout,
             batch_first=True
         )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=config.n_layers)
+        self.transformer: nn.Module = nn.TransformerEncoder(
+            encoder_layer, num_layers=config.n_layers
+        )
         
         # Prediction heads
         self.pt_head = nn.Linear(config.d_model, 1)

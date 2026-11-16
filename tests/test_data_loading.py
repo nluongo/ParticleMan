@@ -2,27 +2,25 @@
 Tests for the data loading module.
 """
 
-import tempfile
 from pathlib import Path
-from typing import Dict
+from typing import Any, Dict
 
 import h5py
 import numpy as np
 import pytest
 import torch
+from omegaconf import DictConfig, OmegaConf
 
-from particleman.data.config import (
-    CollectionColumns,
+from particleman.config import (
+    CollectionColumnsConfig,
     CollectionConfig,
-    DataConfig,
-    PreprocessingConfig,
-    SourceConfig,
-    SplitConfig,
-    load_config,
+    DataSourceConfig,
 )
+from particleman.data.base_loader import get_enabled_collections
 from particleman.data.dataset import (
     ParticleDataset,
     create_dataloaders,
+    create_loader,
     create_split_indices,
 )
 from particleman.data.hdf5_loader import HDF5ParticleLoader
@@ -78,44 +76,52 @@ def sample_h5_file(tmp_path: Path) -> Path:
     return filepath
 
 
+def _data_config(values: Any) -> DictConfig:
+    """Merge ``values`` onto the ``DataSourceConfig`` schema, as Hydra does."""
+    merged = OmegaConf.merge(OmegaConf.structured(DataSourceConfig), values)
+    assert isinstance(merged, DictConfig)
+    return merged
+
+
+def _load_yaml_config(path: Path) -> DictConfig:
+    """Load a data YAML file onto the ``DataSourceConfig`` schema."""
+    return _data_config(OmegaConf.load(path))
+
+
 @pytest.fixture
-def sample_config(sample_h5_file: Path) -> DataConfig:
-    """
-    Create a sample DataConfig for testing.
-    """
-    return DataConfig(
-        source=SourceConfig(
-            type="hdf5",
-            files=[str(sample_h5_file)],
-        ),
-        collections={
-            "particles": CollectionConfig(
-                enabled=True,
-                columns=CollectionColumns(
-                    pt="pt",
-                    eta="eta",
-                    phi="phi",
-                    particle_id="particle_id",
-                ),
-                is_vector=False,
-            )
+def sample_values(sample_h5_file: Path) -> Dict[str, Any]:
+    """Plain data-config values for the sample HDF5 file."""
+    return {
+        "source": {"type": "hdf5", "files": [str(sample_h5_file)]},
+        "collections": {
+            "particles": {
+                "enabled": True,
+                "columns": {
+                    "pt": "pt",
+                    "eta": "eta",
+                    "phi": "phi",
+                    "particle_id": "particle_id",
+                },
+                "is_vector": False,
+            }
         },
-        particle_id_map={i: i for i in range(16)},  # Identity mapping
-        default_particle_id=15,
-        preprocessing=PreprocessingConfig(
-            pt_cut=0.0,
-            eta_cut=999.0,
-            max_particles=50,
-            pt_scale=1.0,
-            shuffle_particles=False,
-        ),
-        split=SplitConfig(
-            train=0.8,
-            val=0.1,
-            test=0.1,
-            seed=42,
-        ),
-    )
+        "particle_id_map": {i: i for i in range(16)},  # Identity mapping
+        "default_particle_id": 15,
+        "preprocessing": {
+            "pt_cut": 0.0,
+            "eta_cut": 999.0,
+            "max_particles": 50,
+            "pt_scale": 1.0,
+            "shuffle_particles": False,
+        },
+        "split": {"train": 0.8, "val": 0.1, "test": 0.1, "seed": 42},
+    }
+
+
+@pytest.fixture
+def sample_config(sample_values: Dict[str, Any]) -> DictConfig:
+    """Sample data config composed onto the Hydra schema."""
+    return _data_config(sample_values)
 
 
 @pytest.fixture
@@ -173,60 +179,67 @@ split:
 
 
 class TestConfig:
-    """Tests for configuration classes."""
+    """Tests for the data config schema and the checks applied to it."""
 
-    def test_collection_config_requires_particle_id(self):
-        """Test that CollectionConfig requires either particle_id column or fixed_particle_id."""
-        with pytest.raises(ValueError, match="must specify either"):
+    def test_collection_config_with_fixed_id(self) -> None:
+        """A collection can use a fixed particle ID instead of a column."""
+        config = OmegaConf.structured(
             CollectionConfig(
-                enabled=True,
-                columns=CollectionColumns(pt="pt", eta="eta", phi="phi"),
-                fixed_particle_id=None,  # Neither column nor fixed ID
+                columns=CollectionColumnsConfig(pt="pt", eta="eta", phi="phi"),
+                fixed_particle_id=7,
             )
-
-    def test_collection_config_with_fixed_id(self):
-        """Test CollectionConfig with fixed_particle_id."""
-        config = CollectionConfig(
-            enabled=True,
-            columns=CollectionColumns(pt="pt", eta="eta", phi="phi"),
-            fixed_particle_id=7,
         )
         assert config.fixed_particle_id == 7
         assert config.columns.particle_id is None
 
-    def test_collection_config_with_column_id(self):
-        """Test CollectionConfig with particle_id column."""
-        config = CollectionConfig(
-            enabled=True,
-            columns=CollectionColumns(pt="pt", eta="eta", phi="phi", particle_id="pid"),
+    def test_collection_config_with_column_id(self) -> None:
+        """A collection can read particle IDs from a column."""
+        config = OmegaConf.structured(
+            CollectionConfig(
+                columns=CollectionColumnsConfig(
+                    pt="pt", eta="eta", phi="phi", particle_id="pid"
+                ),
+            )
         )
         assert config.columns.particle_id == "pid"
+        assert config.fixed_particle_id is None
 
-    def test_source_config_validation(self):
-        """Test SourceConfig validates source type."""
+    def test_unknown_source_type(self, sample_values: Dict[str, Any]) -> None:
+        """Creating a loader for an unknown source type fails."""
+        sample_values["source"]["type"] = "invalid"
         with pytest.raises(ValueError, match="Unknown source type"):
-            SourceConfig(type="invalid", files=["test.root"])
+            create_loader(_data_config(sample_values))
 
-    def test_split_config_validation(self):
-        """Test SplitConfig validates fractions sum to 1."""
+    def test_split_fractions_must_sum_to_one(self) -> None:
+        """Split fractions that do not sum to 1 are rejected."""
         with pytest.raises(ValueError, match="must sum to 1.0"):
-            SplitConfig(train=0.5, val=0.3, test=0.1)  # Sum = 0.9
+            create_split_indices(100, train_frac=0.5, val_frac=0.3, test_frac=0.1)
 
-    def test_load_config_from_yaml(self, sample_yaml_config: Path):
-        """Test loading config from YAML file."""
-        config = load_config(sample_yaml_config)
-        
+    def test_load_config_from_yaml(self, sample_yaml_config: Path) -> None:
+        """A data YAML file composes onto the schema."""
+        config = _load_yaml_config(sample_yaml_config)
+
         assert config.source.type == "hdf5"
         assert len(config.collections) == 1
         assert "particles" in config.collections
         assert config.preprocessing.pt_cut == 0.5
         assert config.split.train == 0.8
 
-    def test_get_enabled_collections(self, sample_config: DataConfig):
-        """Test get_enabled_collections method."""
-        enabled = sample_config.get_enabled_collections()
-        assert "particles" in enabled
-        assert len(enabled) == 1
+    def test_schema_rejects_unknown_key(self, sample_values: Dict[str, Any]) -> None:
+        """Keys that are not in the schema are an error."""
+        sample_values["preprocessing"]["not_a_key"] = 1
+        with pytest.raises(Exception, match="not_a_key"):
+            _data_config(sample_values)
+
+    def test_get_enabled_collections(self, sample_values: Dict[str, Any]) -> None:
+        """Disabled collections are filtered out."""
+        sample_values["collections"]["disabled"] = {
+            "enabled": False,
+            "columns": {"pt": "pt", "eta": "eta", "phi": "phi"},
+            "fixed_particle_id": 3,
+        }
+        enabled = get_enabled_collections(_data_config(sample_values))
+        assert list(enabled) == ["particles"]
 
 
 # ============================================================================
@@ -237,12 +250,12 @@ class TestConfig:
 class TestHDF5Loader:
     """Tests for HDF5ParticleLoader."""
 
-    def test_loader_initialization(self, sample_config: DataConfig):
+    def test_loader_initialization(self, sample_config: DictConfig):
         """Test loader initializes correctly."""
         loader = HDF5ParticleLoader(sample_config)
         assert len(loader) == 100
 
-    def test_get_event(self, sample_config: DataConfig):
+    def test_get_event(self, sample_config: DictConfig):
         """Test loading a single event."""
         loader = HDF5ParticleLoader(sample_config)
         event = loader.get_event(0)
@@ -262,7 +275,7 @@ class TestHDF5Loader:
         assert event["particle_id"].shape == (max_p,)
         assert event["mask"].shape == (max_p,)
 
-    def test_get_event_dtypes(self, sample_config: DataConfig):
+    def test_get_event_dtypes(self, sample_config: DictConfig):
         """Test event data types."""
         loader = HDF5ParticleLoader(sample_config)
         event = loader.get_event(0)
@@ -273,7 +286,7 @@ class TestHDF5Loader:
         assert event["particle_id"].dtype == np.int32
         assert event["mask"].dtype == bool
 
-    def test_iteration(self, sample_config: DataConfig):
+    def test_iteration(self, sample_config: DictConfig):
         """Test iterating over loader."""
         loader = HDF5ParticleLoader(sample_config)
         
@@ -285,7 +298,7 @@ class TestHDF5Loader:
         
         assert count == 5
 
-    def test_indexing(self, sample_config: DataConfig):
+    def test_indexing(self, sample_config: DictConfig):
         """Test indexing with negative indices."""
         loader = HDF5ParticleLoader(sample_config)
         
@@ -301,7 +314,7 @@ class TestHDF5Loader:
         with pytest.raises(IndexError):
             _ = loader[1000]
 
-    def test_get_dataset_names(self, sample_config: DataConfig):
+    def test_get_dataset_names(self, sample_config: DictConfig):
         """Test get_dataset_names method."""
         loader = HDF5ParticleLoader(sample_config)
         names = loader.get_dataset_names()
@@ -320,17 +333,17 @@ class TestHDF5Loader:
 class TestParticleDataset:
     """Tests for ParticleDataset."""
 
-    def test_dataset_initialization(self, sample_config: DataConfig):
+    def test_dataset_initialization(self, sample_config: DictConfig):
         """Test dataset initializes correctly."""
         dataset = ParticleDataset(sample_config)
         assert len(dataset) == 100
 
     def test_dataset_from_yaml(self, sample_yaml_config: Path):
         """Test creating dataset from YAML path."""
-        dataset = ParticleDataset(sample_yaml_config)
+        dataset = ParticleDataset(_load_yaml_config(sample_yaml_config))
         assert len(dataset) > 0
 
-    def test_getitem_returns_tensors(self, sample_config: DataConfig):
+    def test_getitem_returns_tensors(self, sample_config: DictConfig):
         """Test that __getitem__ returns torch tensors."""
         dataset = ParticleDataset(sample_config)
         sample = dataset[0]
@@ -341,7 +354,7 @@ class TestParticleDataset:
         assert isinstance(sample["particle_id"], torch.Tensor)
         assert isinstance(sample["mask"], torch.Tensor)
 
-    def test_getitem_tensor_dtypes(self, sample_config: DataConfig):
+    def test_getitem_tensor_dtypes(self, sample_config: DictConfig):
         """Test tensor data types."""
         dataset = ParticleDataset(sample_config)
         sample = dataset[0]
@@ -352,14 +365,14 @@ class TestParticleDataset:
         assert sample["particle_id"].dtype == torch.long
         assert sample["mask"].dtype == torch.bool
 
-    def test_dataset_with_indices(self, sample_config: DataConfig):
+    def test_dataset_with_indices(self, sample_config: DictConfig):
         """Test dataset with subset of indices."""
         indices = [0, 5, 10, 15, 20]
         dataset = ParticleDataset(sample_config, indices=indices)
         
         assert len(dataset) == 5
 
-    def test_dataset_with_transform(self, sample_config: DataConfig):
+    def test_dataset_with_transform(self, sample_config: DictConfig):
         """Test dataset with custom transform."""
         def double_pt(event: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
             event["pt"] = event["pt"] * 2
@@ -408,7 +421,7 @@ class TestDataLoaders:
         assert val1 == val2
         assert test1 == test2
 
-    def test_create_dataloaders(self, sample_config: DataConfig):
+    def test_create_dataloaders(self, sample_config: DictConfig):
         """Test create_dataloaders function."""
         train_loader, val_loader, test_loader = create_dataloaders(
             sample_config,
@@ -426,7 +439,7 @@ class TestDataLoaders:
         assert batch["pt"].shape[0] == 16  # Batch size
         assert batch["pt"].shape[1] == sample_config.preprocessing.max_particles
 
-    def test_dataloader_iteration(self, sample_config: DataConfig):
+    def test_dataloader_iteration(self, sample_config: DictConfig):
         """Test iterating through dataloader."""
         train_loader, _, _ = create_dataloaders(
             sample_config,
@@ -454,7 +467,7 @@ class TestDataLoaders:
 class TestIntegration:
     """Integration tests for the full data pipeline."""
 
-    def test_full_pipeline(self, sample_config: DataConfig):
+    def test_full_pipeline(self, sample_config: DictConfig):
         """Test full pipeline from config to batch."""
         # Create dataloaders
         train_loader, val_loader, test_loader = create_dataloaders(

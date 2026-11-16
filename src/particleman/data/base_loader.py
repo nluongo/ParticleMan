@@ -154,7 +154,7 @@ class BaseParticleLoader(ABC):
             (path, offsets[i + 1] - offsets[i]) for i, path in enumerate(file_paths)
         ]
 
-    def get_event(self, idx: int) -> Dict[str, np.ndarray]:
+    def get_event(self, idx: int) -> Dict[str, Any]:
         """
         Get a single event by index, combining all enabled collections.
 
@@ -169,6 +169,7 @@ class BaseParticleLoader(ABC):
                 - 'particle_id': int32 array of shape (max_particles,)
                 - 'mask': bool array of shape (max_particles,) - True for real particles
                 - 'n_particles': int - number of real particles before padding
+                - 'event_label': int - file-origin label (-1 if unmatched)
         """
         all_pt: List[np.ndarray] = []
         all_eta: List[np.ndarray] = []
@@ -279,7 +280,7 @@ class BaseParticleLoader(ABC):
         """
         particle_id_map = self.config.get("particle_id_map", {})
         default_id = self.config.get("default_particle_id", 15)
-        return particle_id_map.get(raw_id, default_id)
+        return int(particle_id_map.get(raw_id, default_id))
 
     def _map_particle_ids(self, raw_ids: np.ndarray) -> np.ndarray:
         """
@@ -352,12 +353,12 @@ class BaseParticleLoader(ABC):
             mask,
         )
 
-    def __iter__(self) -> Iterator[Dict[str, np.ndarray]]:
+    def __iter__(self) -> Iterator[Dict[str, Any]]:
         """Iterate over all events."""
         for idx in range(len(self)):
             yield self.get_event(idx)
 
-    def __getitem__(self, idx: int) -> Dict[str, np.ndarray]:
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
         """Get event by index (supports negative indexing)."""
         if idx < 0:
             idx = len(self) + idx

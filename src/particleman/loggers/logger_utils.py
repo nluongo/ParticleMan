@@ -1,4 +1,6 @@
 import logging
+from typing import Any
+
 from .base import BaseLogger, NoOpLogger
 
 logger = logging.getLogger(__name__)
@@ -7,7 +9,7 @@ def create_logger(
     logger_type: str,
     experiment_name: str,
     async_logging: bool = False,
-    **kwargs,
+    **kwargs: Any,
 ) -> BaseLogger:
     """Factory function to create a logger based on the specified type.
 

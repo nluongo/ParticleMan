@@ -8,7 +8,7 @@ PyTorch's DistributedDataParallel (DDP).
 import datetime
 import logging
 import os
-from typing import Mapping, Optional, Tuple
+from typing import Any, Mapping, Optional, Tuple
 
 import torch
 import torch.distributed as dist
@@ -210,6 +210,7 @@ def create_distributed_dataloader(
     Returns:
         DataLoader configured for distributed training
     """
+    sampler: Optional[DistributedSampler[Any]]
     if world_size > 1:
         sampler = DistributedSampler(
             dataset,

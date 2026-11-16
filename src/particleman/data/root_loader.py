@@ -267,11 +267,11 @@ class ROOTParticleLoader(BaseParticleLoader):
         # Convert awkward array to numpy
         if hasattr(arr, "to_numpy"):
             # Simple case: already flat
-            return arr.to_numpy().flatten()
+            return np.asarray(arr.to_numpy()).flatten()
         elif hasattr(arr, "tolist"):
             # Awkward array - need to flatten
             flat = ak.flatten(arr, axis=None)
-            return ak.to_numpy(flat)
+            return np.asarray(ak.to_numpy(flat))
         else:
             # Try direct numpy conversion
             return np.asarray(arr).flatten()

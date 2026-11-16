@@ -65,7 +65,7 @@ class OutputManager:
         
         self._create_directories()
     
-    def _generate_run_name(self, timestamp=None) -> str:
+    def _generate_run_name(self, timestamp: Optional[str] = None) -> str:
         """
         Generate a unique run name.
         
@@ -147,7 +147,7 @@ class OutputManager:
         filepath = self.run_dir / filename
         
         # Convert non-serializable types
-        def convert(obj):
+        def convert(obj: Any) -> Any:
             if hasattr(obj, "value"):  # Enum
                 return obj.value
             if hasattr(obj, "__dict__"):  # Dataclass or object
@@ -175,7 +175,7 @@ class OutputManager:
         Returns:
             Path to the saved job info file, or None if not in a job.
         """
-        job_info = {}
+        job_info: Dict[str, Any] = {}
         
         # PBS environment variables
         pbs_vars = [

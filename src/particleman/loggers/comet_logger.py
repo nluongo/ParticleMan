@@ -14,7 +14,7 @@ class CometLogger(BaseLogger):
         workspace: Optional[str] = None,
         run_name: Optional[str] = None,
         api_key: Optional[str] = None,
-    ):
+    ) -> None:
         """
         Initialize CometML experiment.
 
@@ -40,11 +40,11 @@ class CometLogger(BaseLogger):
         if run_name:
             self._experiment.set_name(run_name)
 
-    def log_params(self, params: Dict[str, Any]):
+    def log_params(self, params: Dict[str, Any]) -> None:
         self._experiment.log_parameters(params)
 
-    def log_metrics(self, metrics: Dict[str, float], step: Optional[int] = None):
+    def log_metrics(self, metrics: Dict[str, float], step: Optional[int] = None) -> None:
         self._experiment.log_metrics(metrics, step=step)
 
-    def close(self):
+    def close(self) -> None:
         self._experiment.end()

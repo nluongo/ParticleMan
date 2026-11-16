@@ -51,6 +51,7 @@ dev = [
     "ruff>=0.0.280",
     "flake8>=6.0.0",
     "mypy>=1.5.0",
+    "types-tqdm",
     "pre-commit>=3.3.0",
     "tox>=4.6.0",
 ]
@@ -141,6 +142,11 @@ strict_equality = true
 module = [
     "torch.*",
     "tensorboard.*",
+    # No type stubs available
+    "h5py.*",
+    "uproot.*",
+    "awkward.*",
+    "comet_ml.*",
 ]
 ignore_missing_imports = true
 

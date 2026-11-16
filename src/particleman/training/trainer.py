@@ -12,7 +12,7 @@ import time
 from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional, Union, cast
 
 import torch
 from torch.optim import AdamW
@@ -173,8 +173,8 @@ class ParticleTrainer:
     def _get_model_for_inference(self) -> ParticleTransformer:
         """Get the underlying model (unwrapped from DDP if necessary)."""
         if hasattr(self.model, 'module'):
-            return self.model.module
-        return self.model
+            return cast(ParticleTransformer, self.model.module)
+        return cast(ParticleTransformer, self.model)
     
     def _create_masks_with_retry(
         self,
@@ -336,12 +336,12 @@ class ParticleTrainer:
         # Convert to float for logging
         return {k: v.item() for k, v in losses.items()}
     
-    def evaluate(self, dataloader: DataLoader) -> Dict[str, float]:
+    def evaluate(self, dataloader: Optional[DataLoader]) -> Dict[str, float]:
         """
         Evaluate the model on a given dataloader.
         
         Args:
-            dataloader: DataLoader to evaluate on
+            dataloader: DataLoader to evaluate on (None returns an empty dict)
             
         Returns:
             Dictionary of loss values (averaged across processes if distributed)
@@ -493,7 +493,7 @@ class ParticleTrainer:
             record_shapes=True,
             profile_memory=True,
             with_stack=False,
-            on_trace_ready=torch.profiler.tensorboard_trace_handler(self.profile_dir)
+            on_trace_ready=torch.profiler.tensorboard_trace_handler(str(self.profile_dir))
         )
 
     def _report_profile(self, prof: torch.profiler.profile) -> None:
@@ -610,6 +610,7 @@ class ParticleTrainer:
         if init_val_losses and self.is_main:
             logger.info(f"Epoch 0 - Initial Validation Loss: {init_val_losses['total_loss']:.4f}")
             self.experiment_logger.log_metrics({f"val_{k}": v for k, v in init_val_losses.items()}, step=self.step)
+            self.experiment_logger.log_metrics({f"val_epoch_{k}": v for k, v in init_val_losses.items()}, step=self.epoch)
 
         self.timing["initial_eval_s"] = round(time.time() - self._train_start, 3)
         self._write_timing()
@@ -627,10 +628,11 @@ class ParticleTrainer:
                     self.train_dataloader.sampler.set_epoch(epoch)
 
                 # Training loop with progress bar (only on main process)
-                if self.is_main:
-                    pbar = tqdm(self.train_dataloader, desc=f"Epoch {epoch+1}/{num_epochs}")
-                else:
-                    pbar = self.train_dataloader
+                pbar = tqdm(
+                    self.train_dataloader,
+                    desc=f"Epoch {epoch+1}/{num_epochs}",
+                    disable=not self.is_main,
+                )
 
                 self.optimizer.zero_grad()
 
@@ -666,18 +668,22 @@ class ParticleTrainer:
                         if self.is_main and self.step % self.log_interval == 0 and len(batch_losses) > 0:
                             recent_losses = batch_losses[-self.log_interval:]
                             avg_loss = sum(l['total_loss'] for l in recent_losses) / len(recent_losses)
-                            lr = self.scheduler.get_last_lr()[0]
+                            lr = float(self.scheduler.get_last_lr()[0])
                             pbar.set_postfix({'loss': f"{avg_loss:.4f}", 'lr': f"{lr:.2e}"})
 
                             metrics_to_log = losses.copy()
                             metrics_to_log['avg_loss'] = avg_loss
                             metrics_to_log['lr'] = lr
-                            metrics_to_log = {f"train_{k}": v for k, v in metrics_to_log.items()}
+                            step_metrics_to_log = {f"train_{k}": v for k, v in metrics_to_log.items()}
                             with torch.autograd.profiler.record_function("training_log_metrics"):
-                                self.experiment_logger.log_metrics(metrics_to_log, step=self.step)
+                                self.experiment_logger.log_metrics(step_metrics_to_log, step=self.step)
 
                     if prof is not None:
                         prof.step()
+
+                epoch_metrics_to_log = {f"train_epoch_{k}": v for k, v in metrics_to_log.items()}
+                with torch.autograd.profiler.record_function("training_epoch_log_metrics"):
+                    self.experiment_logger.log_metrics(epoch_metrics_to_log, step=self.epoch)
 
                 train_s = time.time() - epoch_t0
 
@@ -696,6 +702,7 @@ class ParticleTrainer:
                     val_loss = val_losses['total_loss']
                     logger.info(f"Epoch {epoch+1} - Val Loss: {val_loss:.4f}")
                     self.experiment_logger.log_metrics({f"val_{k}": v for k, v in val_losses.items()}, step=self.step)
+                    self.experiment_logger.log_metrics({f"val_epoch_{k}": v for k, v in val_losses.items()}, step=self.epoch+1)
 
                     # Save best model
                     if val_loss < self.best_val_loss:
@@ -710,7 +717,7 @@ class ParticleTrainer:
                 if self.is_distributed:
                     sync_across_processes()
 
-        if self.profile:
+        if self.profile and prof is not None:
             self._report_profile(prof)
 
         self.timing["end_time"] = self._now_iso()
