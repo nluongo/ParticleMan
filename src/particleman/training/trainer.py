@@ -640,6 +640,7 @@ class ParticleTrainer:
                 epoch_t0 = time.time()
                 n_batches = 0
                 n_samples = 0
+                epoch_losses = 0
 
                 for batch_idx, batch in enumerate(pbar):
                     n_batches += 1
@@ -681,7 +682,10 @@ class ParticleTrainer:
                     if prof is not None:
                         prof.step()
 
-                epoch_metrics_to_log = {f"train_epoch_{k}": v for k, v in metrics_to_log.items()}
+                epoch_batch_losses = batch_losses[-n_batches:]
+                epoch_losses = {k : sum(l[k] for l in v) / n_batches for k:v in epoch_batch_losses.items()} 
+
+                epoch_metrics_to_log = {f"train_epoch_{k}": v for k, v in epoch_losses.items()}
                 with torch.autograd.profiler.record_function("training_epoch_log_metrics"):
                     self.experiment_logger.log_metrics(epoch_metrics_to_log, step=self.epoch)
 
