@@ -62,6 +62,9 @@ class ParticleTrainer:
         mode: str = 'pretrain',
         pretrained_checkpoint: Optional[Path] = None,
         timing_path: Optional[Path] = None,
+        lr_schedule: str = 'cosine',
+        mask_mode: str = 'random',
+        mask_seed: int = 0,
     ) -> None:
         """
         Initialize the trainer.
@@ -92,10 +95,28 @@ class ParticleTrainer:
             timing_path: JSON file for training throughput and timing (start time,
                 elapsed time, per-epoch it/s and samples/s). Rewritten after every
                 epoch on the main process, so it survives interrupted runs.
+            lr_schedule: 'cosine' (cosine decay to 0 over the run) or 'constant'.
+            mask_mode: Pretrain masking. 'random' draws new masks every step,
+                'fixed' gives each event the same masked particles and noise in
+                train and eval, 'fixed_eval' is random in train and fixed in eval.
+                Fixed modes need 'event_index' in the batch.
+            mask_seed: Base seed for fixed masks.
         """
         if mode not in ('pretrain', 'classify'):
             raise ValueError(f"mode must be 'pretrain' or 'classify', got {mode!r}")
         self.mode = mode
+        if lr_schedule not in ('cosine', 'constant'):
+            raise ValueError(
+                f"lr_schedule must be 'cosine' or 'constant', got {lr_schedule!r}"
+            )
+        if mask_mode not in ('random', 'fixed', 'fixed_eval'):
+            raise ValueError(
+                "mask_mode must be 'random', 'fixed' or 'fixed_eval', "
+                f"got {mask_mode!r}"
+            )
+        self.lr_schedule = lr_schedule
+        self.mask_mode = mask_mode
+        self.mask_seed = mask_seed
         self.num_epochs = num_epochs
         self.rank = rank
         self.world_size = world_size
@@ -138,11 +159,17 @@ class ParticleTrainer:
         )
         
         # Setup scheduler using actual num_epochs
-        total_steps = len(train_dataloader) * num_epochs
-        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            self.optimizer, 
-            T_max=total_steps
-        )
+        self.scheduler: torch.optim.lr_scheduler.LRScheduler
+        if lr_schedule == 'constant':
+            self.scheduler = torch.optim.lr_scheduler.LambdaLR(
+                self.optimizer, lr_lambda=lambda _: 1.0
+            )
+        else:
+            total_steps = len(train_dataloader) * num_epochs
+            self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                self.optimizer,
+                T_max=total_steps
+            )
         
         # Training state
         self.step = 0
@@ -184,6 +211,7 @@ class ParticleTrainer:
         particle_id: torch.Tensor,
         padding_mask: torch.Tensor,
         event_label: Optional[torch.Tensor] = None,
+        event_index: Optional[torch.Tensor] = None,
     ) -> Optional[tuple]:
         """
         Create masks for prediction with retry logic for empty masks.
@@ -193,23 +221,54 @@ class ParticleTrainer:
             padding_mask: Boolean mask where True = padding
             event_label: Optional event class labels; forwarded to create_masks so
                 the event label classification loss is included when n_event_types > 0.
+            event_index: Optional global event indices. If given, masks are
+                deterministic per event (seeded by ``self.mask_seed``), so only one
+                attempt is made.
 
         Returns:
             Tuple of (masked_inputs, mask_targets) if successful, None if all attempts failed
         """
         raw_model = self._get_model_for_inference()
 
-        for _ in range(self.max_mask_attempts):
+        attempts = 1 if event_index is not None else self.max_mask_attempts
+        for _ in range(attempts):
             masked_inputs, mask_targets = raw_model.create_masks(
                 pt, eta, phi, particle_id,
                 padding_mask=padding_mask,
                 event_label=event_label,
+                event_index=event_index,
+                mask_seed=self.mask_seed,
             )
             if mask_targets['mask'].sum() > 0:
                 return masked_inputs, mask_targets
 
         return None
     
+    def _event_index_for_masks(
+        self, batch: Dict[str, torch.Tensor], train: bool
+    ) -> Optional[torch.Tensor]:
+        """
+        Return the batch's event indices if masks should be fixed, else None.
+
+        Args:
+            batch: Batch dictionary from the dataloader.
+            train: True for a training step, False for evaluation.
+
+        Returns:
+            The 'event_index' tensor when ``mask_mode`` asks for fixed masks in
+            this phase, otherwise None (random masks).
+        """
+        fixed = self.mask_mode == 'fixed' or (
+            self.mask_mode == 'fixed_eval' and not train
+        )
+        if not fixed:
+            return None
+        if 'event_index' not in batch:
+            raise KeyError(
+                f"mask_mode={self.mask_mode!r} needs 'event_index' in the batch"
+            )
+        return batch['event_index']
+
     def _classify_step(self, batch: Dict[str, torch.Tensor]) -> Optional[Dict[str, float]]:
         """
         Perform a single classification step: supervised event label classification.
@@ -295,8 +354,10 @@ class ParticleTrainer:
         event_label = batch['event_label'].to(self.device) if 'event_label' in batch else None
 
         # Create masks for prediction with retry logic for empty masks
+        event_index = self._event_index_for_masks(batch, train=True)
         mask_result = self._create_masks_with_retry(
-            pt, eta, phi, particle_id, padding_mask, event_label=event_label
+            pt, eta, phi, particle_id, padding_mask,
+            event_label=event_label, event_index=event_index,
         )
         
         # Skip batch if no valid mask could be created
@@ -385,8 +446,10 @@ class ParticleTrainer:
                     losses = raw_model.compute_loss(predictions, targets)
                 else:
                     event_label = batch['event_label'].to(self.device) if 'event_label' in batch else None
+                    event_index = self._event_index_for_masks(batch, train=False)
                     mask_result = self._create_masks_with_retry(
-                        pt, eta, phi, particle_id, padding_mask, event_label=event_label
+                        pt, eta, phi, particle_id, padding_mask,
+                        event_label=event_label, event_index=event_index,
                     )
                     if mask_result is None:
                         skipped_batches += 1

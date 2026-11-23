@@ -30,3 +30,11 @@ profile: false
 pretrained_checkpoint: null
 # Training mode: 'pretrain' (masked particle prediction) or 'classify' (supervised classification)
 mode: pretrain
+# Learning rate schedule: 'cosine' (decays to 0 over the run) or 'constant'
+lr_schedule: cosine
+# Pretrain masking: 'random' (new masks each step), 'fixed' (same masked particles
+# and noise for each event in train and eval) or 'fixed_eval' (random in train,
+# fixed in eval). Fixed masks are by position: use data.preprocessing.shuffle_particles=false
+mask_mode: random
+# Base seed for fixed masks
+mask_seed: 0

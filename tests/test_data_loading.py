@@ -364,6 +364,12 @@ class TestParticleDataset:
         assert sample["phi"].dtype == torch.float32
         assert sample["particle_id"].dtype == torch.long
         assert sample["mask"].dtype == torch.bool
+        assert sample["event_index"].dtype == torch.long
+
+    def test_event_index_is_global(self, sample_config: DictConfig):
+        """event_index is the global loader index, not the position in the subset."""
+        dataset = ParticleDataset(sample_config, indices=[5, 10, 15])
+        assert [int(dataset[i]["event_index"]) for i in range(3)] == [5, 10, 15]
 
     def test_dataset_with_indices(self, sample_config: DictConfig):
         """Test dataset with subset of indices."""

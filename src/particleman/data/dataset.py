@@ -109,6 +109,9 @@ class ParticleDataset(Dataset):
                 - 'particle_id': long tensor of shape (max_particles,)
                 - 'mask': bool tensor of shape (max_particles,)
                 - 'n_particles': int tensor (scalar)
+                - 'event_label': long tensor (scalar)
+                - 'event_index': long tensor (scalar), global index into the
+                  loader; stable across epochs and splits
         """
         # Map to actual index
         actual_idx = self._indices[idx]
@@ -129,6 +132,7 @@ class ParticleDataset(Dataset):
             "mask": torch.tensor(event["mask"], dtype=torch.bool),
             "n_particles": torch.tensor(event["n_particles"], dtype=torch.long),
             "event_label": torch.tensor(event["event_label"], dtype=torch.long),
+            "event_index": torch.tensor(actual_idx, dtype=torch.long),
         }
 
     @property

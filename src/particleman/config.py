@@ -161,6 +161,11 @@ class TrainingConfig:
     profile: bool = False
     pretrained_checkpoint: Optional[str] = None
     mode: str = 'pretrain'  # 'pretrain' or 'classify'
+    lr_schedule: str = "cosine"  # 'cosine' (decay to 0) or 'constant'
+    # Pretrain masking: 'random' (new masks every step), 'fixed' (same mask and
+    # noise per event in train and eval) or 'fixed_eval' (random train, fixed eval)
+    mask_mode: str = "random"
+    mask_seed: int = 0  # Base seed for fixed masks
 
 
 # =============================================================================

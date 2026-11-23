@@ -477,6 +477,50 @@ class ParticleTransformer(nn.Module):
 
         return predictions
     
+    @staticmethod
+    def _draw_mask_randoms(
+        batch_size: int,
+        seq_len: int,
+        device: torch.device,
+        event_index: Optional[Tensor] = None,
+        mask_seed: int = 0,
+    ) -> Tuple[Tensor, Tensor, Tensor]:
+        """
+        Draw the random numbers used for masking.
+
+        Args:
+            batch_size: Number of events in the batch.
+            seq_len: Number of particle slots per event.
+            device: Device for the returned tensors.
+            event_index: Optional (batch,) global event indices. If given, each
+                event's values come from a generator seeded by
+                ``(mask_seed, event_index)``, so an event always gets the same
+                values regardless of epoch or batch composition. If None, values
+                come from the global torch RNG.
+            mask_seed: Base seed for the per-event generators.
+
+        Returns:
+            Tuple of ``u_particle`` (batch, seq) uniforms for particle masking,
+            ``noise`` (3, batch, seq) standard normals for pt/eta/phi, and
+            ``u_event`` (batch,) uniforms for event label masking.
+        """
+        if event_index is None:
+            return (
+                torch.rand(batch_size, seq_len, device=device),
+                torch.randn(3, batch_size, seq_len, device=device),
+                torch.rand(batch_size, device=device),
+            )
+
+        u_particle = torch.empty(batch_size, seq_len)
+        noise = torch.empty(3, batch_size, seq_len)
+        u_event = torch.empty(batch_size)
+        for i, idx in enumerate(event_index.detach().cpu().tolist()):
+            gen = torch.Generator().manual_seed(int(mask_seed) * 1_000_003 + int(idx))
+            u_particle[i] = torch.rand(seq_len, generator=gen)
+            noise[:, i] = torch.randn(3, seq_len, generator=gen)
+            u_event[i] = torch.rand(1, generator=gen)
+        return u_particle.to(device), noise.to(device), u_event.to(device)
+
     def create_masks(
         self,
         pt: Tensor,
@@ -487,63 +531,56 @@ class ParticleTransformer(nn.Module):
         mask_prob: Optional[float] = None,
         event_label: Optional[Tensor] = None,
         event_label_mask_prob: Optional[float] = None,
+        event_index: Optional[Tensor] = None,
+        mask_seed: int = 0,
     ) -> Tuple[Dict[str, Tensor], Dict[str, Tensor]]:
         """
-        Create random masks for pre-training.
-        
+        Create masks for pre-training.
+
         Only real particles (non-padding) are masked. Padded positions are never
         masked and never contribute to the loss.
-        
+
         Args:
             pt, eta, phi, particle_id: Input tensors (batch, seq)
             padding_mask: Boolean mask where True indicates padding positions.
                          If None, all positions are treated as real particles.
             mask_prob: Probability of masking each real particle.
-        
+            event_label: Optional (batch,) event labels for event label masking.
+            event_label_mask_prob: Probability of masking each event label.
+            event_index: Optional (batch,) global event indices. If given, masks
+                and noise are deterministic per event (see ``_draw_mask_randoms``).
+            mask_seed: Base seed for deterministic masks.
+
         Returns:
             Tuple of (masked_inputs, mask_targets) dictionaries.
         """
         if mask_prob is None:
             mask_prob = self.config.mask_prob
-        
+
         batch_size, seq_len = pt.shape
         device = pt.device
-        
-        # Create random mask for prediction targets
-        random_mask = torch.rand(batch_size, seq_len, device=device) < mask_prob
-        
-        # Only mask real particles, not padding
+
+        u_particle, noise, u_event = self._draw_mask_randoms(
+            batch_size, seq_len, device, event_index=event_index, mask_seed=mask_seed
+        )
+
+        # Mask only real particles, never padding (padding_mask: True = padding)
+        prediction_mask = u_particle < mask_prob
         if padding_mask is not None:
-            # padding_mask: True = padding, False = real particle
-            # We want to mask only real particles
-            prediction_mask = random_mask & (~padding_mask)
-        else:
-            prediction_mask = random_mask
-        
-        # Create masked inputs
-        masked_pt = pt.clone()
-        masked_eta = eta.clone() 
-        masked_phi = phi.clone()
-        masked_particle_id = particle_id.clone()
-        
-        if prediction_mask.sum() > 0:
-            # Add noise to continuous features for masked positions
-            masked_pt[prediction_mask] = torch.normal(
-                mean=masked_pt[prediction_mask], 
-                std=self.config.mask_continuous_std
-            )
-            masked_eta[prediction_mask] = torch.normal(
-                mean=masked_eta[prediction_mask], 
-                std=self.config.mask_continuous_std
-            )
-            masked_phi[prediction_mask] = torch.normal(
-                mean=masked_phi[prediction_mask], 
-                std=self.config.mask_continuous_std
-            )
-            
-            # Replace particle IDs with mask token (last ID)
-            masked_particle_id[prediction_mask] = self.config.n_particle_types - 1
-        
+            prediction_mask = prediction_mask & (~padding_mask)
+
+        # Add noise to continuous features and replace IDs with the mask token
+        # (last ID) at masked positions
+        std = self.config.mask_continuous_std
+        masked_pt = torch.where(prediction_mask, pt + std * noise[0], pt)
+        masked_eta = torch.where(prediction_mask, eta + std * noise[1], eta)
+        masked_phi = torch.where(prediction_mask, phi + std * noise[2], phi)
+        masked_particle_id = torch.where(
+            prediction_mask,
+            torch.full_like(particle_id, self.config.n_particle_types - 1),
+            particle_id,
+        )
+
         masked_inputs = {
             'pt': masked_pt,
             'eta': masked_eta,
@@ -564,7 +601,7 @@ class ParticleTransformer(nn.Module):
             if event_label_mask_prob is None:
                 event_label_mask_prob = self.config.event_label_mask_prob
             # Randomly select events to mask; exclude events with unknown label (-1)
-            random_event_mask = torch.rand(batch_size, device=device) < event_label_mask_prob
+            random_event_mask = u_event < event_label_mask_prob
             event_label_prediction_mask = random_event_mask & (event_label != -1)
             mask_targets['event_label'] = event_label
             mask_targets['event_label_mask'] = event_label_prediction_mask

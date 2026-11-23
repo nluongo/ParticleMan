@@ -320,6 +320,39 @@ class TestParticleTransformer:
         mask_ratio = mask_targets['mask'].float().mean()
         assert 0.1 < mask_ratio < 0.3  # Allow some variance due to randomness
     
+    def test_fixed_masks_are_deterministic(self, model: ParticleTransformer, sample_data: dict) -> None:
+        """Same event_index gives identical masks and noise; different indices differ."""
+        args = (sample_data['pt'], sample_data['eta'], sample_data['phi'], sample_data['particle_id'])
+        idx = torch.arange(sample_data['pt'].shape[0])
+        in1, tg1 = model.create_masks(*args, event_index=idx, mask_seed=3)
+        in2, tg2 = model.create_masks(*args, event_index=idx, mask_seed=3)
+        assert torch.equal(tg1['mask'], tg2['mask'])
+        for k in ('pt', 'eta', 'phi', 'particle_id'):
+            assert torch.equal(in1[k], in2[k])
+        _, tg3 = model.create_masks(*args, event_index=idx + 1000, mask_seed=3)
+        assert not torch.equal(tg1['mask'], tg3['mask'])
+        _, tg4 = model.create_masks(*args, event_index=idx, mask_seed=4)
+        assert not torch.equal(tg1['mask'], tg4['mask'])
+
+    def test_fixed_masks_independent_of_batch(self, model: ParticleTransformer, sample_data: dict) -> None:
+        """An event's fixed mask doesn't depend on which other events share its batch."""
+        args = [sample_data[k] for k in ('pt', 'eta', 'phi', 'particle_id')]
+        idx = torch.arange(100, 100 + args[0].shape[0])
+        inp_full, tg_full = model.create_masks(*args, event_index=idx)
+        inp_one, tg_one = model.create_masks(*[a[7:8] for a in args], event_index=idx[7:8])
+        assert torch.equal(tg_full['mask'][7:8], tg_one['mask'])
+        assert torch.equal(inp_full['eta'][7:8], inp_one['eta'])
+
+    def test_fixed_masks_skip_padding(self, model: ParticleTransformer, sample_data: dict) -> None:
+        """Padding is never masked with fixed masks."""
+        args = [sample_data[k] for k in ('pt', 'eta', 'phi', 'particle_id')]
+        padding = torch.zeros_like(args[0], dtype=torch.bool)
+        padding[:, args[0].shape[1] // 2:] = True
+        idx = torch.arange(args[0].shape[0])
+        _, tg = model.create_masks(*args, padding_mask=padding, mask_prob=0.9, event_index=idx)
+        assert not (tg['mask'] & padding).any()
+        assert tg['mask'].any()
+
     def test_create_masks_with_padding(self, model: ParticleTransformer, sample_data: dict) -> None:
         """Test that masking respects padding."""
         pt = sample_data['pt']
@@ -530,10 +563,11 @@ def _make_dataloader(batch_size: int = 2, seq_len: int = 10, n_event_types: int 
         torch.randint(0, 14, (B, S)),
         torch.ones(B, S, dtype=torch.bool),
         torch.randint(0, n_event_types, (B,)),
+        torch.arange(B),
     )
 
     def collate(items):
-        pt, eta, phi, pid, mask, lbl = zip(*items)
+        pt, eta, phi, pid, mask, lbl, idx = zip(*items)
         return {
             'pt': torch.stack(pt),
             'eta': torch.stack(eta),
@@ -541,6 +575,7 @@ def _make_dataloader(batch_size: int = 2, seq_len: int = 10, n_event_types: int 
             'particle_id': torch.stack(pid),
             'mask': torch.stack(mask),
             'event_label': torch.stack(lbl),
+            'event_index': torch.stack(idx),
         }
 
     return DataLoader(ds, batch_size=batch_size, collate_fn=collate)
@@ -639,3 +674,60 @@ class TestParticleTrainer:
         dl = _make_dataloader()
         with pytest.raises(ValueError, match="mode must be"):
             ParticleTrainer(ParticleTransformer(small_config), dl, device='cpu', mode='bad')
+
+    def test_invalid_lr_schedule_raises(self, small_config: ParticleConfig) -> None:
+        """An unknown lr_schedule raises ValueError."""
+        dl = _make_dataloader()
+        with pytest.raises(ValueError, match="lr_schedule must be"):
+            ParticleTrainer(ParticleTransformer(small_config), dl, device='cpu', lr_schedule='bad')
+
+    def test_invalid_mask_mode_raises(self, small_config: ParticleConfig) -> None:
+        """An unknown mask_mode raises ValueError."""
+        dl = _make_dataloader()
+        with pytest.raises(ValueError, match="mask_mode must be"):
+            ParticleTrainer(ParticleTransformer(small_config), dl, device='cpu', mask_mode='bad')
+
+    def test_constant_lr_schedule(self, small_config: ParticleConfig) -> None:
+        """With lr_schedule='constant' the LR stays at its initial value."""
+        dl = _make_dataloader()
+        trainer = ParticleTrainer(
+            ParticleTransformer(small_config), dl, device='cpu', num_epochs=1,
+            lr=1e-3, lr_schedule='constant',
+        )
+        for _ in range(5):
+            trainer.optimizer.step()
+            trainer.scheduler.step()
+        assert trainer.scheduler.get_last_lr()[0] == pytest.approx(1e-3)
+
+    def test_cosine_lr_schedule_decays(self, small_config: ParticleConfig) -> None:
+        """The default cosine schedule decays the LR."""
+        dl = _make_dataloader()
+        trainer = ParticleTrainer(
+            ParticleTransformer(small_config), dl, device='cpu', num_epochs=1, lr=1e-3,
+        )
+        trainer.optimizer.step()
+        trainer.scheduler.step()
+        assert trainer.scheduler.get_last_lr()[0] < 1e-3
+
+    def test_fixed_mask_mode_gives_deterministic_eval(self, small_config: ParticleConfig) -> None:
+        """mask_mode='fixed_eval' makes evaluation loss reproducible."""
+        dl = _make_dataloader()
+        trainer = ParticleTrainer(
+            ParticleTransformer(small_config), dl, val_dataloader=dl, device='cpu',
+            num_epochs=1, mask_mode='fixed_eval',
+        )
+        assert trainer.evaluate(dl) == trainer.evaluate(dl)
+        batch = next(iter(dl))
+        assert trainer._event_index_for_masks(batch, train=True) is None
+        assert trainer._event_index_for_masks(batch, train=False) is not None
+
+    def test_fixed_mask_mode_requires_event_index(self, small_config: ParticleConfig) -> None:
+        """Fixed masks without 'event_index' in the batch raise a clear error."""
+        dl = _make_dataloader()
+        trainer = ParticleTrainer(
+            ParticleTransformer(small_config), dl, device='cpu', num_epochs=1, mask_mode='fixed',
+        )
+        batch = next(iter(dl))
+        del batch['event_index']
+        with pytest.raises(KeyError, match="event_index"):
+            trainer.train_step(batch)

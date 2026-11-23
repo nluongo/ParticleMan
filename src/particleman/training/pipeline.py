@@ -234,6 +234,18 @@ def run_training(cfg: DictConfig) -> None:
         logger.info(f"  n_heads: {model_config.n_heads}")
         logger.info(f"  n_layers: {model_config.n_layers}")
         logger.info(f"  mask_prob: {model_config.mask_prob}")
+        logger.info(f"  mask_mode: {cfg.training.mask_mode}")
+        logger.info(f"  lr_schedule: {cfg.training.lr_schedule}")
+        shuffle_particles = cfg.data.get("preprocessing", {}).get(
+            "shuffle_particles", True
+        )
+        if cfg.training.mask_mode != "random" and shuffle_particles:
+            logger.warning(
+                f"training.mask_mode={cfg.training.mask_mode} fixes masks by "
+                "particle position, but particle order is reshuffled on every "
+                "read, so the masked particles still change. Set "
+                "data.preprocessing.shuffle_particles=false for truly fixed masks."
+            )
         logger.info("Creating model...")
 
     model: ParticleTransformer
@@ -255,6 +267,9 @@ def run_training(cfg: DictConfig) -> None:
         "effective_batch_size": cfg.training.batch_size * world_size,
         "lr": cfg.training.lr,
         "weight_decay": cfg.training.weight_decay,
+        "lr_schedule": cfg.training.lr_schedule,
+        "mask_mode": cfg.training.mask_mode,
+        "mask_seed": cfg.training.mask_seed,
         "epochs": cfg.training.epochs,
         "num_params": n_params,
         "world_size": world_size,
@@ -319,6 +334,9 @@ def run_training(cfg: DictConfig) -> None:
         pretrained_checkpoint=Path(pretrained) if pretrained else None,
         mode=cfg.training.mode,
         timing_path=output.run_dir / "timing.json" if output else None,
+        lr_schedule=cfg.training.lr_schedule,
+        mask_mode=cfg.training.mask_mode,
+        mask_seed=cfg.training.mask_seed,
     )
 
     if main_process:
